@@ -161,11 +161,12 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
   time_t diff_ms = (current.tv_sec - last_time->tv_sec) * 1000;
   diff_ms += (current.tv_nsec - last_time->tv_nsec) / 1.0e6; // convert nanoseconds to miliseconds
   double elapsed_secs = ( (double) diff_ms ) / 1000.0;
-  printf("elapsed %f\n",elapsed_secs);
+  printf("elapsed secs %f\n",elapsed_secs);
   if (elapsed_secs < 0) err(EXIT_FAILURE, "elapsed secs < 0 : %f", elapsed_secs);
   *last_time = current;
 
   DIR *dir = opendir("/proc");
+  if (!dir) err(EXIT_FAILURE, "opendir /proc");
   struct dirent *dp;
   while( (dp = readdir(dir)) ) {
     if (dp->d_name[0] < '0' || dp->d_name[0] > '9') continue;
@@ -175,7 +176,6 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
       // read smaps
       char *path;
       CHECK_POSIX(asprintf(&path, "/proc/%s/smaps", dp->d_name), "asprintf");
-      printf("%s\n",path);
       FILE *stream = fopen(path, "r");
       if (NULL == stream)
         err(EXIT_FAILURE, "fopen(%s)", path);
@@ -257,7 +257,7 @@ static void set_non_blocking(int fd) {
 // Mark any extra file descriptors `CLOEXEC`. Only `stdin`, `stdout` and `stderr` are left open.
 static void prevent_leaked_file_descriptors() {
     DIR *dir = opendir("/proc/self/fd");
-    if (!dir) err(EXIT_FAILURE, "opendir");
+    if (!dir) err(EXIT_FAILURE, "opendir /proc/self/fd");
     struct dirent *dp;
     while ((dp = readdir(dir))) {
         char *end;
@@ -398,7 +398,7 @@ int sandbox(void *my_args) {
          rlimit_nproc = -1,
          rlimit_nice = -1;
     long max_mbs = -1,
-         mbs_check_every = 250;
+         mbs_check_every = 500;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
@@ -474,7 +474,6 @@ int sandbox(void *my_args) {
             break;
         case 'x':
             max_mbs = strtolx_positive(optarg, "max-mbs");
-            mount_proc = true; //we need proc to do that
             break;
         case 'e':
             mbs_check_every = strtolx_positive(optarg, "mbs-check-every");
@@ -731,6 +730,13 @@ int sandbox(void *my_args) {
         CHECK_POSIX(execvpe(argv[optind], argv + optind, env), "execvpe");
     }
 
+    if (max_mbs) {
+        // avoid propagating mounts to or from the parent's mount namespace
+        MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
+
+        MOUNTX(NULL, "/proc", "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
+    }
+
     bind_list_free(binds);
     seccomp_release(ctx);
 
@@ -760,7 +766,9 @@ int sandbox(void *my_args) {
         CHECK_POSIX(mbs_fd, "timerfd_create");
         epoll_add(epoll_fd, mbs_fd, EPOLLIN);
 
-        struct itimerspec spec = { .it_value = { .tv_nsec = mbs_check_every * 1000000 } };
+        long secs = mbs_check_every / 1000;
+        struct timespec t = { .tv_sec = secs, .tv_nsec = (mbs_check_every % 1000) * 1000000 };
+        struct itimerspec spec = { .it_interval = t, .it_value = t };
         CHECK_POSIX(timerfd_settime(mbs_fd, 0, &spec, NULL), "timerfd_settime");
     }
 
@@ -792,12 +800,14 @@ int sandbox(void *my_args) {
             if (evt->events & EPOLLIN) {
                 if (evt->data.fd == mbs_fd) {
                     current_mbs = calculate_mbs(current_mbs, &last_time, max_mbs);
-                    printf("%f\n",current_mbs);
+                    printf("current_mbs %f\n",current_mbs);
                     if (current_mbs >= max_mbs) {
                       warnx("MB-s cap reached!");
                       kill(pid, SIGKILL);
                       return 2;
                     }
+                    uint64_t value;
+                    (void) read(mbs_fd, &value, 8); //we must read this value
                 } else if (evt->data.fd == timer_fd) {
                     warnx("timeout triggered!");
                     kill(pid, SIGKILL);
