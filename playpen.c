@@ -25,13 +25,20 @@
 #include <sys/timerfd.h>
 #include <sys/reg.h>
 #include <sys/wait.h>
+#include <time.h>
 
 #include <seccomp.h>
 
 #define SYSCALL_NAME_MAX 30
+#define STACK_SIZE 512 * 1024
 
 #define CHECK_POSIX(rc,...) check_posix(__FILE__,__LINE__,rc,__VA_ARGS__)
 #define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
+
+typedef struct {
+  int argc;
+  char **argv;
+} args;
 
 static void check(int rc) {
     if (rc < 0) errx(EXIT_FAILURE, "%s", strerror(-rc));
@@ -146,6 +153,71 @@ static void drop_capabilities() {
   }
 }
 
+static double calculate_mbs(double old_mbs, struct timespec *last_time, double max_mbs)
+{
+  // get interval, in ms
+  struct timespec current;
+  CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &current), "clock_gettime");
+  time_t diff_ms = (current.tv_sec - last_time->tv_sec) * 1000;
+  diff_ms += (current.tv_nsec - last_time->tv_nsec) / 1.0e6; // convert nanoseconds to miliseconds
+  double elapsed_secs = ( (double) diff_ms ) / 1000.0;
+  printf("elapsed %f\n",elapsed_secs);
+  if (elapsed_secs < 0) err(EXIT_FAILURE, "elapsed secs < 0 : %f", elapsed_secs);
+  *last_time = current;
+
+  DIR *dir = opendir("/proc");
+  struct dirent *dp;
+  while( (dp = readdir(dir)) ) {
+    if (dp->d_name[0] < '0' || dp->d_name[0] > '9') continue;
+    char *end;
+    strtol(dp->d_name, &end, 10);
+    if (*end == '\0') {
+      // read smaps
+      char *path;
+      CHECK_POSIX(asprintf(&path, "/proc/%s/smaps", dp->d_name), "asprintf");
+      printf("%s\n",path);
+      FILE *stream = fopen(path, "r");
+      if (NULL == stream)
+        err(EXIT_FAILURE, "fopen(%s)", path);
+
+      // unfortunately this is the only way to get the Pss
+      char *line = NULL;
+      size_t len;
+      ssize_t read;
+      while( (read = getline(&line, &len, stream)) != -1 ) {
+        char *pss = strstr(line, "Pss:");
+        if (NULL != pss) {
+          pss += 4;
+          while (*pss == ' ') pss++;
+          if (*pss < '0' || *pss > '9') errx(EXIT_FAILURE, "pss string '%s': expected number", line);
+
+          char *end_pss;
+          int pss_kb = (int)strtol(pss, &end_pss, 10);
+          if (pss_kb < 0) errx(EXIT_FAILURE, "negative pss: '%d'", pss_kb);
+          if (end_pss == pss) errx(EXIT_FAILURE, "cannot parse number for pss '%s'", line);
+
+          double pss_mb = ( (double) pss_kb ) / 1024.0;
+          old_mbs += pss_mb * elapsed_secs;
+          if (old_mbs >= max_mbs) {
+            free(line);
+            fclose(stream);
+            free(path);
+            closedir(dir);
+            return old_mbs; // we don't need to loop in here anymore
+          }
+        }
+      }
+
+      free(line);
+      fclose(stream);
+      free(path);
+    }
+  }
+  closedir(dir);
+
+  return old_mbs;
+}
+
 _Noreturn static void usage(FILE *out) {
     fprintf(out, "usage: %s [options] [root] [command ...]\n", program_invocation_short_name);
     fputs("Options:\n"
@@ -160,6 +232,8 @@ _Noreturn static void usage(FILE *out) {
           "     --rlimit-nofile=VALUE   sets the rlimit max number of open files\n"
           "     --rlimit-nproc=VALUE    sets the rlimit max number of open processes\n"
           "     --rlimit-nice=VALUE     sets the rlimit min number of nice (set as 20 + nice_value. seee rlimit manpage)\n"
+          " -x, --max-mbs               sets the maximum accumulated MB-s that the process can use\n"
+          " -e, --mbs-check-every       sets the internal, in ms, to check the memory usage for the MB-s accumulator\n"
           " -b, --bind                  bind mount a read-only directory in the container\n"
           " -B, --bind-rw               bind mount a directory in the container\n"
           " -u, --user=USER             the user to run the program as\n"
@@ -290,8 +364,29 @@ static void handle_signal(int sig_fd, pid_t child_fd,
     }
 }
 
+static args cmd_args;
+static char sandbox_stack[STACK_SIZE];
+
+static int sandbox(void *args);
+
 int main(int argc, char **argv) {
     prevent_leaked_file_descriptors();
+
+    cmd_args.argc = argc;
+    cmd_args.argv = argv;
+
+    int flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
+    pid_t pid = clone(sandbox, sandbox_stack + STACK_SIZE, flags, &cmd_args);
+    CHECK_POSIX(pid, "clone");
+    int status = 0;
+    waitpid(pid, &status, 0);
+    exit(status);
+}
+
+int sandbox(void *my_args) {
+    args *args = my_args;
+    int argc = args->argc;
+    char **argv = args->argv;
 
     bool mount_proc = false;
     bool mount_dev = false;
@@ -302,6 +397,8 @@ int main(int argc, char **argv) {
          rlimit_nofile = -1,
          rlimit_nproc = -1,
          rlimit_nice = -1;
+    long max_mbs = -1,
+         mbs_check_every = 250;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
@@ -323,6 +420,8 @@ int main(int argc, char **argv) {
         { "rlimit-nofile", required_argument, 0, 0x202 },
         { "rlimit-nproc",  required_argument, 0, 0x203 },
         { "rlimit-nice",   required_argument, 0, 0x204 },
+        { "max-mbs",       required_argument, 0, 'x' },
+        { "mbs-check-every",required_argument,0, 'e' },
         { "bind",          required_argument, 0, 'b' },
         { "bind-rw",       required_argument, 0, 'B' },
         { "user",          required_argument, 0, 'u' },
@@ -336,7 +435,7 @@ int main(int argc, char **argv) {
     };
 
     for (;;) {
-        int opt = getopt_long(argc, argv, "hvpb:B:u:n:t:m:d:s:S:l:", opts, NULL);
+        int opt = getopt_long(argc, argv, "hvpx:e:b:B:u:n:t:m:d:s:S:l:", opts, NULL);
         if (opt == -1)
             break;
 
@@ -372,6 +471,13 @@ int main(int argc, char **argv) {
             break;
         case 0x204:
             rlimit_nice = strtolx_positive(optarg, "rlimit-nice");
+            break;
+        case 'x':
+            max_mbs = strtolx_positive(optarg, "max-mbs");
+            mount_proc = true; //we need proc to do that
+            break;
+        case 'e':
+            mbs_check_every = strtolx_positive(optarg, "mbs-check-every");
             break;
         case 'b':
         case 'B':
@@ -475,9 +581,11 @@ int main(int argc, char **argv) {
     epoll_add(epoll_fd, pipe_err[0], EPOLLIN);
     epoll_add(epoll_fd, pipe_in[1], EPOLLET | EPOLLOUT);
 
-    unsigned long flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
-    pid_t pid = (pid_t)syscall(__NR_clone, flags, NULL);
-    CHECK_POSIX(pid, "clone");
+    /* unsigned long flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET; */
+    /* pid_t pid = (pid_t)syscall(__NR_clone, flags, NULL); */
+    /* CHECK_POSIX(pid, "clone"); */
+    pid_t pid = fork();
+    CHECK_POSIX(pid, "fork");
 
     if (pid == 0) {
         dup2(pipe_in[0], STDIN_FILENO);
@@ -646,9 +754,22 @@ int main(int argc, char **argv) {
         CHECK_POSIX(timerfd_settime(timer_fd, 0, &spec, NULL), "timerfd_settime");
     }
 
+    int mbs_fd = -1;
+    if (max_mbs > 0) {
+        mbs_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+        CHECK_POSIX(mbs_fd, "timerfd_create");
+        epoll_add(epoll_fd, mbs_fd, EPOLLIN);
+
+        struct itimerspec spec = { .it_value = { .tv_nsec = mbs_check_every * 1000000 } };
+        CHECK_POSIX(timerfd_settime(mbs_fd, 0, &spec, NULL), "timerfd_settime");
+    }
+
     uint8_t stdin_buffer[PIPE_BUF];
     ssize_t stdin_bytes_read = 0;
     bool trace_init = false;
+    double current_mbs = 0;
+    struct timespec last_time;
+    CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &last_time), "clock_gettime");
 
     for (;;) {
         struct epoll_event events[4];
@@ -669,10 +790,18 @@ int main(int argc, char **argv) {
             }
 
             if (evt->events & EPOLLIN) {
-                if (evt->data.fd == timer_fd) {
+                if (evt->data.fd == mbs_fd) {
+                    current_mbs = calculate_mbs(current_mbs, &last_time, max_mbs);
+                    printf("%f\n",current_mbs);
+                    if (current_mbs >= max_mbs) {
+                      warnx("MB-s cap reached!");
+                      kill(pid, SIGKILL);
+                      return 2;
+                    }
+                } else if (evt->data.fd == timer_fd) {
                     warnx("timeout triggered!");
                     kill(pid, SIGKILL);
-                    return EXIT_FAILURE;
+                    return 3;
                 } else if (evt->data.fd == sig_fd) {
                     handle_signal(sig_fd, pid, &trace_init, learn);
                 } else if (evt->data.fd == pipe_out[0]) {
