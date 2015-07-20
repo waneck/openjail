@@ -367,23 +367,24 @@ static void handle_signal(int sig_fd, pid_t child_fd,
     }
 }
 
-static args cmd_args;
-static char sandbox_stack[STACK_SIZE];
 
 static int sandbox(void *args);
 
 int main(int argc, char **argv) {
     prevent_leaked_file_descriptors();
 
+    args cmd_args;
     cmd_args.argc = argc;
     cmd_args.argv = argv;
+    char sandbox_stack[STACK_SIZE]; //reuse our own stack for the child
 
     int flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
     pid_t pid = clone(sandbox, sandbox_stack + STACK_SIZE, flags, &cmd_args);
     CHECK_POSIX(pid, "clone");
     int status = 0;
     waitpid(pid, &status, 0);
-    exit(status);
+    int exitstatus = WEXITSTATUS(status);
+    return exitstatus;
 }
 
 int sandbox(void *my_args) {
