@@ -132,6 +132,7 @@ _Noreturn static void usage(FILE *out) {
           " -v, --version               display version\n"
           " -p, --mount-proc            mount /proc in the container\n"
           "     --mount-dev             mount /dev as devtmpfs in the container\n"
+          "     --mount-tmpfs           mount tmpfs containers\n"
           " -b, --bind                  bind mount a read-only directory in the container\n"
           " -B, --bind-rw               bind mount a directory in the container\n"
           " -u, --user=USER             the user to run the program as\n"
@@ -268,6 +269,7 @@ int main(int argc, char **argv) {
 
     bool mount_proc = false;
     bool mount_dev = false;
+    bool mount_tmpfs = false;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
@@ -283,6 +285,7 @@ int main(int argc, char **argv) {
         { "version",       no_argument,       0, 'v' },
         { "mount-proc",    no_argument,       0, 'p' },
         { "mount-dev",     no_argument,       0, 0x100 },
+        { "mount-tmpfs",   no_argument,       0, 0x101 },
         { "bind",          required_argument, 0, 'b' },
         { "bind-rw",       required_argument, 0, 'B' },
         { "user",          required_argument, 0, 'u' },
@@ -312,6 +315,9 @@ int main(int argc, char **argv) {
             break;
         case 0x100:
             mount_dev = true;
+            break;
+        case 0x101:
+            mount_tmpfs = true;
             break;
         case 'b':
         case 'B':
@@ -468,21 +474,27 @@ int main(int argc, char **argv) {
             free(mnt);
         }
 
-        char *shm = join_path(root, "dev/shm");
-        if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) {
-            if (errno != ENOENT) {
-                err(EXIT_FAILURE, "mounting /dev/shm failed");
-            }
+        if (mount_tmpfs)
+        {
+          char *shm = join_path(root, "dev/shm");
+          if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) {
+              if (errno != ENOENT) {
+                  err(EXIT_FAILURE, "mounting /dev/shm failed");
+              }
+          }
+          free(shm);
         }
-        free(shm);
 
-        char *tmp = join_path(root, "tmp");
-        if (mount(NULL, tmp, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) {
-            if (errno != ENOENT) {
-                err(EXIT_FAILURE, "mounting /tmp failed");
-            }
+        if (mount_tmpfs)
+        {
+          char *tmp = join_path(root, "tmp");
+          if (mount(NULL, tmp, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) {
+              if (errno != ENOENT) {
+                  err(EXIT_FAILURE, "mounting /tmp failed");
+              }
+          }
+          free(tmp);
         }
-        free(tmp);
 
         bind_list_apply(root, binds);
 
@@ -506,10 +518,17 @@ int main(int argc, char **argv) {
             }
         }
 
-        MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
+        // check if exists
+        if (access(pw->pw_dir, F_OK) >= 0)
+        {
+          if (mount_tmpfs)
+            MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
 
-        // switch to the user's home directory as a login shell would
-        CHECK_POSIX(chdir(pw->pw_dir), "chdir");
+          // switch to the user's home directory as a login shell would
+          CHECK_POSIX(chdir(pw->pw_dir), "chdir");
+        } else {
+          CHECK_POSIX(chdir("/"), "chdir");
+        }
 
         // create a new session
         CHECK_POSIX(setsid(), "setsid");

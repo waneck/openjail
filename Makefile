@@ -3,7 +3,7 @@ CC = clang
 
 CFLAGS += -std=c11 -D_GNU_SOURCE -O2 \
 	  -D_FORTIFY_SOURCE=2 -fPIE -fstack-check -fstack-protector-strong \
-	  -DVERSION=\"$(shell git describe)\"
+	  -DVERSION=\"$(shell git describe)\" -g2
 LDLIBS = -lseccomp
 LDFLAGS += -pie -Wl,--as-needed,-z,relro,-z,now
 
