@@ -125,6 +125,15 @@ static int get_syscall_nr(const char *name) {
     return result;
 }
 
+static void set_rlimit(int resource, long value) {
+   struct rlimit rlim;
+   if (value < 0)
+     return;
+   rlim.rlim_cur = (rlim_t) value;
+   rlim.rlim_max = (rlim_t) value;
+   CHECK_POSIX(setrlimit((unsigned int) resource, &rlim), "set_rlimit %d", resource);
+}
+
 _Noreturn static void usage(FILE *out) {
     fprintf(out, "usage: %s [options] [root] [command ...]\n", program_invocation_short_name);
     fputs("Options:\n"
@@ -134,6 +143,11 @@ _Noreturn static void usage(FILE *out) {
           "     --mount-dev             mount /dev as devtmpfs in the container\n"
           "     --mount-tmpfs           mount tmpfs containers\n"
           "     --mount-minimal         mount minimal /dev\n"
+          "     --rlimit-as=VALUE       sets the rlimit max virtual memory of the process, in bytes\n"
+          "     --rlimit-fsize=VALUE    sets the rlimit max file size of a single file, in bytes\n"
+          "     --rlimit-nofile=VALUE   sets the rlimit max number of open files\n"
+          "     --rlimit-nproc=VALUE    sets the rlimit max number of open processes\n"
+          "     --rlimit-nice=VALUE     sets the rlimit min number of nice (set as 20 + nice_value. seee rlimit manpage)\n"
           " -b, --bind                  bind mount a read-only directory in the container\n"
           " -B, --bind-rw               bind mount a directory in the container\n"
           " -u, --user=USER             the user to run the program as\n"
@@ -271,6 +285,11 @@ int main(int argc, char **argv) {
     bool mount_dev = false;
     bool mount_tmpfs = false;
     bool mount_minimal_dev = false;
+    long rlimit_as = -1,
+         rlimit_fsize = -1,
+         rlimit_nofile = -1,
+         rlimit_nproc = -1,
+         rlimit_nice = -1;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
@@ -287,6 +306,11 @@ int main(int argc, char **argv) {
         { "mount-dev",     no_argument,       0, 0x100 },
         { "mount-tmpfs",   no_argument,       0, 0x101 },
         { "mount-minimal", no_argument,       0, 0x102 },
+        { "rlimit-as",     required_argument, 0, 0x200 },
+        { "rlimit-fsize",  required_argument, 0, 0x201 },
+        { "rlimit-nofile", required_argument, 0, 0x202 },
+        { "rlimit-nproc",  required_argument, 0, 0x203 },
+        { "rlimit-nice",   required_argument, 0, 0x204 },
         { "bind",          required_argument, 0, 'b' },
         { "bind-rw",       required_argument, 0, 'B' },
         { "user",          required_argument, 0, 'u' },
@@ -321,6 +345,21 @@ int main(int argc, char **argv) {
             break;
         case 0x102:
             mount_minimal_dev = true;
+            break;
+        case 0x200:
+            rlimit_as = strtolx_positive(optarg, "rlimit-as");
+            break;
+        case 0x201:
+            rlimit_fsize = strtolx_positive(optarg, "rlimit-fsize");
+            break;
+        case 0x202:
+            rlimit_nofile = strtolx_positive(optarg, "rlimit-nofile");
+            break;
+        case 0x203:
+            rlimit_nproc = strtolx_positive(optarg, "rlimit-nproc");
+            break;
+        case 0x204:
+            rlimit_nice = strtolx_positive(optarg, "rlimit-nice");
             break;
         case 'b':
         case 'B':
@@ -509,6 +548,12 @@ int main(int argc, char **argv) {
           }
           free(tmp);
         }
+
+        set_rlimit(RLIMIT_AS, rlimit_as);
+        set_rlimit(RLIMIT_FSIZE, rlimit_fsize);
+        set_rlimit(RLIMIT_NOFILE, rlimit_nofile);
+        set_rlimit(RLIMIT_NPROC, rlimit_nproc);
+        set_rlimit(RLIMIT_NICE, rlimit_nice);
 
         bind_list_apply(root, binds);
 
