@@ -133,13 +133,13 @@ _Noreturn static void usage(FILE *out) {
           " -p, --mount-proc            mount /proc in the container\n"
           "     --mount-dev             mount /dev as devtmpfs in the container\n"
           "     --mount-tmpfs           mount tmpfs containers\n"
+          "     --mount-minimal         mount minimal /dev\n"
           " -b, --bind                  bind mount a read-only directory in the container\n"
           " -B, --bind-rw               bind mount a directory in the container\n"
           " -u, --user=USER             the user to run the program as\n"
           " -n, --hostname=NAME         the hostname to set the container to\n"
           " -t, --timeout=INTEGER       how long the container is allowed to run\n"
           " -m, --memory-limit=LIMIT    the memory limit of the container\n"
-          " -d, --devices=LIST          comma-separated whitelist of devices\n"
           " -s, --syscalls=LIST         comma-separated whitelist of syscalls\n"
           " -S, --syscalls-file=PATH    whitelist file containing one syscall name per line\n"
           " -l, --learn=PATH            allow unwhitelisted syscalls and append them to a file\n",
@@ -270,12 +270,12 @@ int main(int argc, char **argv) {
     bool mount_proc = false;
     bool mount_dev = false;
     bool mount_tmpfs = false;
+    bool mount_minimal_dev = false;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
     long memory_limit = 128;
     struct bind_list *binds = NULL, *binds_tail = NULL;
-    char *devices = NULL;
     char *syscalls = NULL;
     const char *syscalls_file = NULL;
     const char *learn_name = NULL;
@@ -286,13 +286,13 @@ int main(int argc, char **argv) {
         { "mount-proc",    no_argument,       0, 'p' },
         { "mount-dev",     no_argument,       0, 0x100 },
         { "mount-tmpfs",   no_argument,       0, 0x101 },
+        { "mount-minimal", no_argument,       0, 0x102 },
         { "bind",          required_argument, 0, 'b' },
         { "bind-rw",       required_argument, 0, 'B' },
         { "user",          required_argument, 0, 'u' },
         { "hostname",      required_argument, 0, 'n' },
         { "timeout",       required_argument, 0, 't' },
         { "memory-limit",  required_argument, 0, 'm' },
-        { "devices",       required_argument, 0, 'd' },
         { "syscalls",      required_argument, 0, 's' },
         { "syscalls-file", required_argument, 0, 'S' },
         { "learn",         required_argument, 0, 'l' },
@@ -319,6 +319,9 @@ int main(int argc, char **argv) {
         case 0x101:
             mount_tmpfs = true;
             break;
+        case 0x102:
+            mount_minimal_dev = true;
+            break;
         case 'b':
         case 'B':
             if (binds) {
@@ -339,9 +342,6 @@ int main(int argc, char **argv) {
             break;
         case 'm':
             memory_limit = strtolx_positive(optarg, "memory limit");
-            break;
-        case 'd':
-            devices = optarg;
             break;
         case 's':
             syscalls = optarg;
@@ -472,6 +472,20 @@ int main(int argc, char **argv) {
             char *mnt = join_path(root, "dev");
             MOUNTX(NULL, mnt, "devtmpfs", MS_NOSUID|MS_NOEXEC, NULL);
             free(mnt);
+        }
+
+        if (mount_minimal_dev) {
+          char *devices[] = { "/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", NULL };
+          for (int i = 0; devices[i] != NULL; i++)
+          {
+            char *mnt = join_path(root, devices[i]);
+            if (access(mnt, F_OK) < 0)
+            {
+              errx(EXIT_FAILURE,"The file '%s' was not found inside the chroot jail", mnt);
+            }
+            CHECK_POSIX(mount(devices[i], mnt, NULL, MS_BIND, NULL), "mount");
+            free(mnt);
+          }
         }
 
         if (mount_tmpfs)
