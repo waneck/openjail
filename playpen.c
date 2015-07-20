@@ -30,14 +30,21 @@
 
 #define SYSCALL_NAME_MAX 30
 
+#define CHECK_POSIX(rc,...) check_posix(__FILE__,__LINE__,rc,__VA_ARGS__)
+#define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
+
 static void check(int rc) {
     if (rc < 0) errx(EXIT_FAILURE, "%s", strerror(-rc));
 }
 
-__attribute__((format(printf, 2, 3))) static void check_posix(intmax_t rc, const char *fmt, ...) {
+__attribute__((format(printf, 4, 5))) static void check_posix(char *file, int line, intmax_t rc, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    if (rc == -1) verr(EXIT_FAILURE, fmt, args);
+    if (rc == -1)
+    {
+      fprintf(stderr, "%s:%d: ", file, line);
+      verr(EXIT_FAILURE, fmt, args);
+    }
     va_end(args);
 }
 
@@ -51,13 +58,13 @@ __attribute__((format(printf, 2, 3))) static bool check_eagain(intmax_t rc, cons
 
 static char *join_path(const char *left, const char *right) {
     char *dst;
-    check_posix(asprintf(&dst, "%s/%s", left, right), "asprintf");
+    CHECK_POSIX(asprintf(&dst, "%s/%s", left, right), "asprintf");
     return dst;
 }
 
-static void mountx(const char *source, const char *target, const char *filesystemtype,
-                   unsigned long mountflags, const void *data) {
-    check_posix(mount(source, target, filesystemtype, mountflags, data),
+static void mountx(char *file, int line, const char *source, const char *target, 
+                   const char *filesystemtype, unsigned long mountflags, const void *data) {
+    check_posix(file,line,mount(source, target, filesystemtype, mountflags, data),
                 "mounting %s as %s (%s) failed", source, target, filesystemtype);
 }
 
@@ -83,9 +90,9 @@ static void bind_list_apply(const char *root, struct bind_list *list) {
         char *dst = join_path(root, list->arg);
         // Only use MS_REC with writable mounts to work around a kernel bug:
         // https://bugzilla.kernel.org/show_bug.cgi?id=24912
-        mountx(list->arg, dst, "bind", MS_BIND | (list->read_only ? 0 : MS_REC), NULL);
+        MOUNTX(list->arg, dst, "bind", MS_BIND | (list->read_only ? 0 : MS_REC), NULL);
         if (list->read_only)
-            mountx(list->arg, dst, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY, NULL);
+            MOUNTX(list->arg, dst, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY, NULL);
         free(dst);
     }
 }
@@ -100,14 +107,14 @@ static void bind_list_free(struct bind_list *list) {
 
 static void epoll_add(int epoll_fd, int fd, uint32_t events) {
     struct epoll_event event = { .data.fd = fd, .events = events };
-    check_posix(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event), "epoll_ctl");
+    CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event), "epoll_ctl");
 }
 
 static void copy_to_stdstream(int in_fd, int out_fd) {
     uint8_t buffer[BUFSIZ];
     ssize_t n = read(in_fd, buffer, sizeof buffer);
     if (check_eagain(n, "read")) return;
-    check_posix(write(out_fd, buffer, (size_t)n), "write");
+    CHECK_POSIX(write(out_fd, buffer, (size_t)n), "write");
 }
 
 static int get_syscall_nr(const char *name) {
@@ -142,8 +149,8 @@ _Noreturn static void usage(FILE *out) {
 
 static void set_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    check_posix(flags, "fcntl");
-    check_posix(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+    CHECK_POSIX(flags, "fcntl");
+    CHECK_POSIX(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
 }
 
 // Mark any extra file descriptors `CLOEXEC`. Only `stdin`, `stdout` and `stderr` are left open.
@@ -155,7 +162,7 @@ static void prevent_leaked_file_descriptors() {
         char *end;
         int fd = (int)strtol(dp->d_name, &end, 10);
         if (*end == '\0' && fd > 2 && fd != dirfd(dir)) {
-            check_posix(ioctl(fd, FIOCLEX), "ioctl");
+            CHECK_POSIX(ioctl(fd, FIOCLEX), "ioctl");
         }
     }
     closedir(dir);
@@ -212,17 +219,17 @@ static void do_trace(const struct signalfd_siginfo *si, bool *trace_init, FILE *
             }
         }
     } else {
-        check_posix(ptrace(PTRACE_SETOPTIONS, si->ssi_pid, 0, PTRACE_O_TRACESECCOMP), "ptrace");
+        CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, si->ssi_pid, 0, PTRACE_O_TRACESECCOMP), "ptrace");
         *trace_init = true;
     }
-    check_posix(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal), "ptrace");
+    CHECK_POSIX(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal), "ptrace");
 }
 
 static void handle_signal(int sig_fd, pid_t child_fd,
                           bool *trace_init, FILE *learn) {
     struct signalfd_siginfo si;
     ssize_t bytes_r = read(sig_fd, &si, sizeof(si));
-    check_posix(bytes_r, "read");
+    CHECK_POSIX(bytes_r, "read");
 
     if (bytes_r != sizeof(si))
         errx(EXIT_FAILURE, "read the wrong amount of bytes");
@@ -377,7 +384,7 @@ int main(int argc, char **argv) {
     }
 
     int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    check_posix(epoll_fd, "epoll_create1");
+    CHECK_POSIX(epoll_fd, "epoll_create1");
 
     sigset_t mask;
     sigemptyset(&mask);
@@ -386,20 +393,20 @@ int main(int argc, char **argv) {
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTERM);
 
-    check_posix(sigprocmask(SIG_BLOCK, &mask, NULL), "sigprocmask");
+    CHECK_POSIX(sigprocmask(SIG_BLOCK, &mask, NULL), "sigprocmask");
 
     int sig_fd = signalfd(-1, &mask, SFD_CLOEXEC);
-    check_posix(sig_fd, "signalfd");
+    CHECK_POSIX(sig_fd, "signalfd");
 
     epoll_add(epoll_fd, sig_fd, EPOLLIN);
 
     int pipe_in[2];
     int pipe_out[2];
     int pipe_err[2];
-    check_posix(pipe(pipe_in), "pipe");
-    check_posix(pipe(pipe_out), "pipe");
+    CHECK_POSIX(pipe(pipe_in), "pipe");
+    CHECK_POSIX(pipe(pipe_out), "pipe");
     set_non_blocking(pipe_out[0]);
-    check_posix(pipe(pipe_err), "pipe");
+    CHECK_POSIX(pipe(pipe_err), "pipe");
     set_non_blocking(pipe_err[0]);
 
     int rc = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, STDIN_FILENO,
@@ -413,7 +420,7 @@ int main(int argc, char **argv) {
 
     unsigned long flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
     pid_t pid = (pid_t)syscall(__NR_clone, flags, NULL);
-    check_posix(pid, "clone");
+    CHECK_POSIX(pid, "clone");
 
     if (pid == 0) {
         dup2(pipe_in[0], STDIN_FILENO);
@@ -431,33 +438,33 @@ int main(int argc, char **argv) {
         // Kill this process if the parent dies. This is not a replacement for killing the sandboxed
         // processes via a control group as it is not inherited by child processes, but is more
         // robust when the sandboxed process is not allowed to fork.
-        check_posix(prctl(PR_SET_PDEATHSIG, SIGKILL), "prctl");
+        CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL), "prctl");
 
         // Wait until the scope unit is set up before moving on. This also ensures that the parent
         // didn't die before `prctl` was called.
         uint8_t ready;
-        check_posix(read(STDIN_FILENO, &ready, sizeof ready), "read");
+        CHECK_POSIX(read(STDIN_FILENO, &ready, sizeof ready), "read");
 
-        check_posix(sethostname(hostname, strlen(hostname)), "sethostname");
+        CHECK_POSIX(sethostname(hostname, strlen(hostname)), "sethostname");
 
         // avoid propagating mounts to or from the parent's mount namespace
-        mountx(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
+        MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
 
         // turn directory into a bind mount
-        mountx(root, root, "bind", MS_BIND|MS_REC, NULL);
+        MOUNTX(root, root, "bind", MS_BIND|MS_REC, NULL);
 
         // re-mount as read-only
-        mountx(root, root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
+        MOUNTX(root, root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
 
         if (mount_proc) {
             char *mnt = join_path(root, "proc");
-            mountx(NULL, mnt, "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
+            MOUNTX(NULL, mnt, "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
             free(mnt);
         }
 
         if (mount_dev) {
             char *mnt = join_path(root, "dev");
-            mountx(NULL, mnt, "devtmpfs", MS_NOSUID|MS_NOEXEC, NULL);
+            MOUNTX(NULL, mnt, "devtmpfs", MS_NOSUID|MS_NOEXEC, NULL);
             free(mnt);
         }
 
@@ -480,14 +487,14 @@ int main(int argc, char **argv) {
         bind_list_apply(root, binds);
 
         // preserve a reference to the target directory
-        check_posix(chdir(root), "chdir");
+        CHECK_POSIX(chdir(root), "chdir");
 
         // make the working directory into the root of the mount namespace
-        mountx(".", "/", NULL, MS_MOVE, NULL);
+        MOUNTX(".", "/", NULL, MS_MOVE, NULL);
 
         // chroot into the root of the mount namespace
-        check_posix(chroot("."), "chroot into `%s` failed", root);
-        check_posix(chdir("/"), "entering chroot `%s` failed", root);
+        CHECK_POSIX(chroot("."), "chroot into `%s` failed", root);
+        CHECK_POSIX(chdir("/"), "entering chroot `%s` failed", root);
 
         errno = 0;
         struct passwd *pw = getpwnam(username);
@@ -499,17 +506,17 @@ int main(int argc, char **argv) {
             }
         }
 
-        mountx(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
+        MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
 
         // switch to the user's home directory as a login shell would
-        check_posix(chdir(pw->pw_dir), "chdir");
+        CHECK_POSIX(chdir(pw->pw_dir), "chdir");
 
         // create a new session
-        check_posix(setsid(), "setsid");
+        CHECK_POSIX(setsid(), "setsid");
 
-        check_posix(initgroups(username, pw->pw_gid), "initgroups");
-        check_posix(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid), "setresgid");
-        check_posix(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid), "setresuid");
+        CHECK_POSIX(initgroups(username, pw->pw_gid), "initgroups");
+        CHECK_POSIX(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid), "setresgid");
+        CHECK_POSIX(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid), "setresuid");
 
         char path[] = "PATH=/usr/local/bin:/usr/bin:/bin";
         char *env[] = {path, NULL, NULL, NULL, NULL};
@@ -519,10 +526,10 @@ int main(int argc, char **argv) {
             errx(EXIT_FAILURE, "asprintf");
         }
 
-        if (learn_name) check_posix(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
+        if (learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
 
         check(seccomp_load(ctx));
-        check_posix(execvpe(argv[optind], argv + optind, env), "execvpe");
+        CHECK_POSIX(execvpe(argv[optind], argv + optind, env), "execvpe");
     }
 
     bind_list_free(binds);
@@ -535,17 +542,17 @@ int main(int argc, char **argv) {
     }
 
     // Inform the child that the scope unit has been created.
-    check_posix(write(pipe_in[1], &(uint8_t) { 0 }, 1), "write");
+    CHECK_POSIX(write(pipe_in[1], &(uint8_t) { 0 }, 1), "write");
     set_non_blocking(pipe_in[1]);
 
     int timer_fd = -1;
     if (timeout) {
         timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-        check_posix(timer_fd, "timerfd_create");
+        CHECK_POSIX(timer_fd, "timerfd_create");
         epoll_add(epoll_fd, timer_fd, EPOLLIN);
 
         struct itimerspec spec = { .it_value = { .tv_sec = timeout } };
-        check_posix(timerfd_settime(timer_fd, 0, &spec, NULL), "timerfd_settime");
+        CHECK_POSIX(timerfd_settime(timer_fd, 0, &spec, NULL), "timerfd_settime");
     }
 
     uint8_t stdin_buffer[PIPE_BUF];
@@ -583,9 +590,9 @@ int main(int argc, char **argv) {
                     copy_to_stdstream(pipe_err[0], STDERR_FILENO);
                 } else if (evt->data.fd == STDIN_FILENO) {
                     stdin_bytes_read = read(STDIN_FILENO, stdin_buffer, sizeof stdin_buffer);
-                    check_posix(stdin_bytes_read, "read");
+                    CHECK_POSIX(stdin_bytes_read, "read");
                     if (stdin_bytes_read == 0) {
-                        check_posix(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
+                        CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
                                     "epoll_ctl");
                         close(STDIN_FILENO);
                         close(pipe_in[1]);
@@ -593,7 +600,7 @@ int main(int argc, char **argv) {
                     }
                     ssize_t bytes_written = write(pipe_in[1], stdin_buffer, (size_t)stdin_bytes_read);
                     if (check_eagain(bytes_written, "write")) {
-                        check_posix(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
+                        CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
                                     "epoll_ctl");
                         continue;
                     }
@@ -619,7 +626,7 @@ int main(int argc, char **argv) {
                     // drain stdin until a write would block
                     for (;;) {
                         stdin_bytes_read = read(STDIN_FILENO, stdin_buffer, sizeof stdin_buffer);
-                        check_posix(stdin_bytes_read, "read");
+                        CHECK_POSIX(stdin_bytes_read, "read");
                         ssize_t bytes_written = write(pipe_in[1], stdin_buffer,
                                                       (size_t)stdin_bytes_read);
                         if (check_eagain(bytes_written, "write")) break;
@@ -637,7 +644,7 @@ int main(int argc, char **argv) {
             if (evt->events & EPOLLHUP) {
                 if (evt->data.fd == STDIN_FILENO) {
                     close(pipe_in[1]);
-                    check_posix(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
+                    CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
                                 "epoll_ctl");
                 }
                 close(evt->data.fd);
