@@ -27,8 +27,6 @@
 #include <sys/wait.h>
 
 #include <seccomp.h>
-#include <systemd/sd-bus.h>
-#include <systemd/sd-login.h>
 
 #define SYSCALL_NAME_MAX 30
 
@@ -97,84 +95,6 @@ static void bind_list_free(struct bind_list *list) {
         struct bind_list *next = list->next;
         free(list);
         list = next;
-    }
-}
-
-static const char *const systemd_bus_name = "org.freedesktop.systemd1";
-static const char *const systemd_path_name = "/org/freedesktop/systemd1";
-static const char *const manager_interface = "org.freedesktop.systemd1.Manager";
-
-static void wait_for_unit(pid_t child_pid, const char *expected_name) {
-    for (;;) {
-        char *unit;
-        check(sd_pid_get_unit(child_pid, &unit));
-        bool equal = !strcmp(expected_name, unit);
-        free(unit);
-        if (equal) break;
-    }
-}
-
-static void start_scope_unit(sd_bus *connection, pid_t child_pid, long memory_limit,
-                             char *devices, const char *unit_name) {
-    sd_bus_message *message = NULL;
-    check(sd_bus_message_new_method_call(connection, &message, systemd_bus_name, systemd_path_name,
-                                         manager_interface, "StartTransientUnit"));
-
-    check(sd_bus_message_append(message, "ss", unit_name, "fail"));
-    check(sd_bus_message_open_container(message, 'a', "(sv)"));
-    check(sd_bus_message_append(message, "(sv)", "PIDs", "au", 1, child_pid));
-    check(sd_bus_message_append(message, "(sv)", "Description", "s",
-                                "Playpen application sandbox"));
-    check(sd_bus_message_append(message, "(sv)", "MemoryLimit", "t",
-                                1024ULL * 1024ULL * (unsigned long long)memory_limit));
-    check(sd_bus_message_append(message, "(sv)", "DevicePolicy", "s", "strict"));
-
-    if (devices) {
-        check(sd_bus_message_open_container(message, 'r', "sv"));
-        check(sd_bus_message_append(message, "s", "DeviceAllow"));
-        check(sd_bus_message_open_container(message, 'v', "a(ss)"));
-        check(sd_bus_message_open_container(message, 'a', "(ss)"));
-
-        for (char *s_ptr = devices, *saveptr; ; s_ptr = NULL) {
-            const char *device = strtok_r(s_ptr, ",", &saveptr);
-            if (!device) break;
-            char *split = strchr(device, ':');
-            if (!split) errx(EXIT_FAILURE, "invalid device parameter `%s`", device);
-            *split = '\0';
-            sd_bus_message_append(message, "(ss)", device, split + 1);
-        }
-
-        check(sd_bus_message_close_container(message));
-        check(sd_bus_message_close_container(message));
-        check(sd_bus_message_close_container(message));
-    }
-
-    check(sd_bus_message_append(message, "(sv)", "CPUAccounting", "b", 1));
-    check(sd_bus_message_append(message, "(sv)", "BlockIOAccounting", "b", 1));
-    check(sd_bus_message_close_container(message));
-    check(sd_bus_message_append(message, "a(sa(sv))", 0));
-
-    sd_bus_error error = SD_BUS_ERROR_NULL;
-    int rc = sd_bus_call(connection, message, 0, &error, NULL);
-    if (rc < 0) errx(EXIT_FAILURE, "%s",
-                     sd_bus_error_is_set(&error) ? error.message : strerror(-rc));
-    sd_bus_message_unref(message);
-
-    wait_for_unit(child_pid, unit_name);
-}
-
-static void stop_scope_unit(sd_bus *connection, const char *unit_name) {
-    sd_bus_error error = SD_BUS_ERROR_NULL;
-    int rc = sd_bus_call_method(connection, systemd_bus_name, systemd_path_name, manager_interface,
-                                "StopUnit", &error, NULL, "ss", unit_name, "fail");
-    if (rc < 0) {
-        if (sd_bus_error_is_set(&error)) {
-            // NoSuchUnit errors are expected as the contained processes can die at any point.
-            if (strcmp(error.name, "org.freedesktop.systemd1.NoSuchUnit"))
-                errx(EXIT_FAILURE, "%s", error.message);
-            sd_bus_error_free(&error);
-        } else
-            errx(EXIT_FAILURE, "%s", strerror(-rc));
     }
 }
 
@@ -298,7 +218,7 @@ static void do_trace(const struct signalfd_siginfo *si, bool *trace_init, FILE *
     check_posix(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal), "ptrace");
 }
 
-static void handle_signal(int sig_fd, sd_bus *connection, const char *unit_name,
+static void handle_signal(int sig_fd, pid_t child_fd,
                           bool *trace_init, FILE *learn) {
     struct signalfd_siginfo si;
     ssize_t bytes_r = read(sig_fd, &si, sizeof(si));
@@ -311,7 +231,7 @@ static void handle_signal(int sig_fd, sd_bus *connection, const char *unit_name,
     case SIGHUP:
     case SIGINT:
     case SIGTERM:
-        stop_scope_unit(connection, unit_name);
+        kill(child_fd, SIGKILL);
         errx(EXIT_FAILURE, "interrupted, stopping early");
     }
 
@@ -614,14 +534,6 @@ int main(int argc, char **argv) {
         if (!learn) err(EXIT_FAILURE, "fopen");
     }
 
-    sd_bus *connection;
-    check(sd_bus_open_system(&connection));
-
-    char unit_name[100];
-    snprintf(unit_name, sizeof unit_name, "playpen-%u.scope", getpid());
-
-    start_scope_unit(connection, pid, memory_limit, devices, unit_name);
-
     // Inform the child that the scope unit has been created.
     check_posix(write(pipe_in[1], &(uint8_t) { 0 }, 1), "write");
     set_non_blocking(pipe_in[1]);
@@ -661,10 +573,10 @@ int main(int argc, char **argv) {
             if (evt->events & EPOLLIN) {
                 if (evt->data.fd == timer_fd) {
                     warnx("timeout triggered!");
-                    stop_scope_unit(connection, unit_name);
+                    kill(pid, SIGKILL);
                     return EXIT_FAILURE;
                 } else if (evt->data.fd == sig_fd) {
-                    handle_signal(sig_fd, connection, unit_name, &trace_init, learn);
+                    handle_signal(sig_fd, pid, &trace_init, learn);
                 } else if (evt->data.fd == pipe_out[0]) {
                     copy_to_stdstream(pipe_out[0], STDOUT_FILENO);
                 } else if (evt->data.fd == pipe_err[0]) {
