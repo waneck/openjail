@@ -134,6 +134,18 @@ static void set_rlimit(int resource, long value) {
    CHECK_POSIX(setrlimit((unsigned int) resource, &rlim), "set_rlimit %d", resource);
 }
 
+static void drop_capabilities() {
+  // once we drop the privileges, we should never regain them
+  // by e.g. executing a suid-root binary
+  CHECK_POSIX(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), "ptrcl set no new privs");
+
+  for (int i = 0; i <= 63; i++) {
+    int code = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
+    if (code < 0 && errno != EINVAL)
+      err(EXIT_FAILURE, "prctl(PR_CAPBSET_DROP, %d, 0, 0, 0)",i);
+  }
+}
+
 _Noreturn static void usage(FILE *out) {
     fprintf(out, "usage: %s [options] [root] [command ...]\n", program_invocation_short_name);
     fputs("Options:\n"
@@ -604,6 +616,7 @@ int main(int argc, char **argv) {
             errx(EXIT_FAILURE, "asprintf");
         }
 
+        drop_capabilities();
         if (learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
 
         check(seccomp_load(ctx));
