@@ -35,6 +35,9 @@
 #define CHECK_POSIX(rc,...) check_posix(__FILE__,__LINE__,rc,__VA_ARGS__)
 #define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
 
+#define EXIT_TIMEOUT 2
+#define EXIT_MB_S 3
+
 typedef struct {
   int argc;
   char **argv;
@@ -161,8 +164,8 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
   time_t diff_ms = (current.tv_sec - last_time->tv_sec) * 1000;
   diff_ms += (current.tv_nsec - last_time->tv_nsec) / 1.0e6; // convert nanoseconds to miliseconds
   double elapsed_secs = ( (double) diff_ms ) / 1000.0;
-  printf("elapsed secs %f\n",elapsed_secs);
   if (elapsed_secs < 0) err(EXIT_FAILURE, "elapsed secs < 0 : %f", elapsed_secs);
+	if (elapsed_secs < 0.001) return old_mbs; // do not set current time if elapsed time is very small
   *last_time = current;
 
   DIR *dir = opendir("/proc");
@@ -398,7 +401,7 @@ int sandbox(void *my_args) {
          rlimit_nproc = -1,
          rlimit_nice = -1;
     long max_mbs = -1,
-         mbs_check_every = 500;
+         mbs_check_every = 250;
     const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
@@ -800,18 +803,17 @@ int sandbox(void *my_args) {
             if (evt->events & EPOLLIN) {
                 if (evt->data.fd == mbs_fd) {
                     current_mbs = calculate_mbs(current_mbs, &last_time, max_mbs);
-                    printf("current_mbs %f\n",current_mbs);
                     if (current_mbs >= max_mbs) {
                       warnx("MB-s cap reached!");
                       kill(pid, SIGKILL);
-                      return 2;
+                      return EXIT_MB_S;
                     }
                     uint64_t value;
                     (void) read(mbs_fd, &value, 8); //we must read this value
                 } else if (evt->data.fd == timer_fd) {
                     warnx("timeout triggered!");
                     kill(pid, SIGKILL);
-                    return 3;
+                    return EXIT_TIMEOUT;
                 } else if (evt->data.fd == sig_fd) {
                     handle_signal(sig_fd, pid, &trace_init, learn);
                 } else if (evt->data.fd == pipe_out[0]) {
