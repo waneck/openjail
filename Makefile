@@ -5,10 +5,10 @@ CC = clang
 
 CFLAGS += -std=c11 -D_GNU_SOURCE -O2 \
 	  -D_FORTIFY_SOURCE=2 -fPIE -fstack-check -fstack-protector-strong \
-		-Wstrict-overflow -Wno-unused-parameter
+		-Wstrict-overflow -Wno-unused-parameter \
 	  -DVERSION=\"$(shell git describe)\" -g2
 LDLIBS = -lseccomp
-LDFLAGS += -pie -Wl,--as-needed, -z,relro, -z,now -z,noexecheap, -z,noexecstack
+LDFLAGS += -pie -Wl,--as-needed,-z,relro,-z,now,-z,noexecstack
 
 ifeq ($(CC), clang)
 	CFLAGS += -Weverything \
@@ -18,7 +18,11 @@ else
 	CFLAGS += -Wall -Wextra
 endif
 
+all: playpen trace
+
 playpen: playpen.c
+
+trace: trace.c
 
 install: playpen
 	install -Dm755 $< $(DESTDIR)$(PREFIX)/bin/$<

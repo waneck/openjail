@@ -35,8 +35,8 @@
 #define CHECK_POSIX(rc,...) check_posix(__FILE__,__LINE__,rc,__VA_ARGS__)
 #define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
 
-#define EXIT_TIMEOUT 2
-#define EXIT_MB_S 3
+#define EXIT_TIMEOUT 3
+#define EXIT_MB_S 4
 
 typedef struct {
   int argc;
