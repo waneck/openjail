@@ -179,7 +179,6 @@ static int child_process(int argc, char **argv)
 
 	CHECK_POSIX(ptrace(PTRACE_TRACEME));
 	CHECK(raise(SIGSTOP));
-	/* CHECK(kill(getpid(), SIGSTOP)); */
 
 	prctl (PR_SET_NO_NEW_PRIVS, 1);
 	scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_TRACE(0)); //let's trace them all
@@ -193,16 +192,31 @@ static int child_process(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-	if (argc < 3)
-		ERRX("usage: %s <output> <command> [command-arguments]\n\tif <output> already exists, the singal contents will be appended", argv[0]);
+	if (argc < 2)
+		ERRX("usage: %s [-o <output>] [--] <command> [command-arguments]\n\tif <output> already exists, the singal contents will be appended", argv[0]);
+	char *output = NULL;
+	int cur_arg = 1;
+	while (cur_arg < argc && argv[cur_arg][0] == '-')
+	{
+		if (strcmp(argv[cur_arg], "-o") == 0)
+		{
+			output = argv[cur_arg + 1];
+			cur_arg += 2;
+		} else if (strcmp(argv[cur_arg], "--") == 0) {
+			cur_arg++;
+			break;
+		} else {
+			ERRX("unrecognized option: %s",argv[cur_arg]);
+		}
+	}
 
 	pid_t child = fork();
 	CHECK_POSIX(child);
 
 	if (child == 0)
 	{
-		return child_process(argc-2, argv+2);
+		return child_process(argc-cur_arg, argv+cur_arg);
 	} else {
-		return trace_process(child, argv[1]);
+		return trace_process(child, output);
 	}
 }
