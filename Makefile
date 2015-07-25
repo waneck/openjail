@@ -22,7 +22,7 @@ all: playpen trace
 
 playpen: playpen.c
 
-trace: trace.c
+trace: array.c trace.c
 
 install: playpen
 	install -Dm755 $< $(DESTDIR)$(PREFIX)/bin/$<
