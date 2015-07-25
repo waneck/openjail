@@ -1,5 +1,4 @@
 #include "array.h"
-#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,18 +13,20 @@ dynarr *dynarr_alloc(unsigned int size)
 	if (NULL == ret) return NULL;
 
 	ret->array = calloc(size, sizeof(intptr_t));
-	ret->length = size;
+	ret->array_length = size;
+	ret->length = 0;
 	return ret;
 }
 
 void dynarr_set(dynarr *self, unsigned int index, intptr_t value)
 {
 	assert(self != NULL);
-	if (index >= self->length)
+	if (index >= self->array_length)
 	{
-		self->array = realloc(self->array, index << 1);
+		self->array = realloc(self->array, index << 1 * sizeof(intptr_t));
 		assert(self->array);
-		self->length = index << 1;
+		self->array_length = index << 1;
+		self->length = index + 1;
 	}
 	self->array[index] = value;
 }
@@ -42,4 +43,27 @@ void dynarr_free(dynarr *self)
 {
 	free(self->array);
 	free(self);
+}
+
+bool dynarr_exists(dynarr *self, intptr_t value)
+{
+	intptr_t *array = self->array;
+	for (unsigned int i = 0; i < self->length; i++)
+	{
+		if (array[i] == value)
+			return true;
+	}
+	return false;
+}
+
+void dynarr_push(dynarr *self, intptr_t value)
+{
+	if ((self->length + 1) >= self->array_length)
+	{
+		self->array = realloc(self->array, self->array_length << 1 * sizeof(intptr_t));
+		assert(self->array);
+		self->array_length = self->array_length << 1;
+	}
+	self->array[self->length] = value;
+	self->length++;
 }

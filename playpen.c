@@ -231,6 +231,7 @@ _Noreturn static void usage(FILE *out) {
           "     --mount-tmpfs           mount tmpfs containers\n"
           "     --mount-minimal         mount minimal /dev\n"
           "     --rlimit-as=VALUE       sets the rlimit max virtual memory of the process, in bytes\n"
+          "     --rlimit-cpu=VALUE      sets the rlimit max CPU time, in seconds\n"
           "     --rlimit-fsize=VALUE    sets the rlimit max file size of a single file, in bytes\n"
           "     --rlimit-nofile=VALUE   sets the rlimit max number of open files\n"
           "     --rlimit-nproc=VALUE    sets the rlimit max number of open processes\n"
@@ -400,7 +401,8 @@ int sandbox(void *my_args) {
          rlimit_fsize = -1,
          rlimit_nofile = -1,
          rlimit_nproc = -1,
-         rlimit_nice = -1;
+         rlimit_nice = -1,
+				 rlimit_cpu = -1;
     long max_mbs = -1,
          mbs_check_every = 250;
     const char *username = "nobody";
@@ -424,6 +426,7 @@ int sandbox(void *my_args) {
         { "rlimit-nofile", required_argument, 0, 0x202 },
         { "rlimit-nproc",  required_argument, 0, 0x203 },
         { "rlimit-nice",   required_argument, 0, 0x204 },
+        { "rlimit-cpu",    required_argument, 0, 0x205 },
         { "max-mbs",       required_argument, 0, 'x' },
         { "mbs-check-every",required_argument,0, 'e' },
         { "bind",          required_argument, 0, 'b' },
@@ -475,6 +478,9 @@ int sandbox(void *my_args) {
             break;
         case 0x204:
             rlimit_nice = strtolx_positive(optarg, "rlimit-nice");
+            break;
+        case 0x205:
+            rlimit_cpu = strtolx_positive(optarg, "rlimit-cpu");
             break;
         case 'x':
             max_mbs = strtolx_positive(optarg, "max-mbs");
@@ -677,6 +683,7 @@ int sandbox(void *my_args) {
         set_rlimit(RLIMIT_NOFILE, rlimit_nofile);
         set_rlimit(RLIMIT_NPROC, rlimit_nproc);
         set_rlimit(RLIMIT_NICE, rlimit_nice);
+        set_rlimit(RLIMIT_CPU, rlimit_cpu);
 
         bind_list_apply(root, binds);
 

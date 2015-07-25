@@ -115,11 +115,12 @@ static int trace_process(pid_t child, char *output)
 		long syscall;
 		char *syscall_name;
 		get_syscall(cur_child, &syscall, &syscall_name);
-		intptr_t val = dynarr_get(found_syscalls, (unsigned int) syscall);
-
-		if (0 == val)
+		if (!dynarr_exists(found_syscalls, (intptr_t) syscall))
+		{
 			printf("%s\n", syscall_name);
-		dynarr_set(found_syscalls, (unsigned int) syscall, val + 1);
+			dynarr_push(found_syscalls, (intptr_t) syscall);
+		}
+
 		CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
 	}
 
