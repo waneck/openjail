@@ -39,6 +39,16 @@ static void get_syscall(pid_t child, long *normalized_id, char **name)
 	*normalized_id = syscall;
 }
 
+static long get_syscall_num(char *name)
+{
+	long result = seccomp_syscall_resolve_name(name);
+	if (result == __NR_SCMP_ERROR) 
+	{
+		errx(EXIT_FAILURE, "non-existent syscall: %s", name);
+	}
+	return result;
+}
+
 static int wait_for_seccomp_or_attach(pid_t child, int *child_count, pid_t *cur_child, int *exit_code)
 {
 	while(true)
@@ -104,6 +114,36 @@ static int trace_process(pid_t child, char *output)
 	CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_FLAGS));
 	CHECK_POSIX(ptrace(PTRACE_CONT, child, 0, 0));
 
+	if (NULL != output)
+	{
+		FILE *file = fopen(output, "r");
+		if (NULL != file)
+		{
+			char *line = NULL;
+			size_t len;
+			ssize_t read;
+			while( (read = getline(&line, &len, file)) != -1 ) 
+			{
+				int i = 0;
+				while(true)
+				{
+					char cur =line[i];
+					if (cur == '\n' || cur == '\r')
+						line[i] = '\0';
+					if (cur == '\0')
+						break;
+					i++;
+				}
+				long syscall = get_syscall_num(line);
+				if (!dynarr_exists(found_syscalls, (intptr_t) syscall))
+					dynarr_push(found_syscalls, (intptr_t) syscall);
+			}
+			free(line);
+			fclose(file);
+		}
+	}
+
+	FILE *file = output != NULL ? fopen(output, "a") : NULL;
 	int child_count = 0, exit_code = 0;
 	while(true)
 	{
@@ -119,7 +159,9 @@ static int trace_process(pid_t child, char *output)
 		{
 			printf("%s\n", syscall_name);
 			dynarr_push(found_syscalls, (intptr_t) syscall);
+			if (file != NULL) fprintf(file, "%s\n", syscall_name);
 		}
+		free(syscall_name);
 
 		CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
 	}
