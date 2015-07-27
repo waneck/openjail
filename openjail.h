@@ -14,6 +14,7 @@ struct bind_list
 
 typedef struct 
 {
+	// arguments passed by the user
 	bool mount_proc;
 	bool mount_dev;
 	bool mount_tmpfs;
@@ -36,9 +37,14 @@ typedef struct
 	const char *learn_name;
 	const char *root;
 	char * const *cmd;
+
+	// arguments inferred
+	const bool is_root;
+	const uid_t orig_uid;
+	const gid_t orig_gid;
 } oj_args;
 
-// args.c
+// implemented on args.c
 
 void parse_args(int argc, char **argv, oj_args *out_struct);
 

@@ -332,30 +332,110 @@ static void handle_signal(int sig_fd, pid_t child_fd,
 	}
 }
 
+static char *my_strdup(char *val)
+{
+	if (val)
+		return strdup(val);
+	return NULL;
+}
+
+static bool get_pw(const oj_args *args, struct passwd *out)
+{
+	if (args->is_root)
+	{
+		// no namespace mangling was made
+		errno = 0;
+		struct passwd *pw = getpwuid(getuid());
+		if (!pw && errno)
+			err(EXIT_FAILURE, "getpwuid");
+		if (pw)
+		{
+			out->pw_name = my_strdup(pw->pw_name);
+			out->pw_uid = pw->pw_uid;
+			out->pw_gid = pw->pw_gid;
+			out->pw_dir = my_strdup(pw->pw_dir);
+			out->pw_shell = my_strdup(pw->pw_shell);
+			return true;
+		}
+	}
+
+	// if failed, use current environment info
+	// this will pick up the parent namespace information
+	// from the current user. If you want to override this behaviour,
+	// provide a /etc/passwd with the correct information
+	out->pw_name = my_strdup(getenv("USER"));
+	out->pw_uid = getuid();
+	out->pw_gid = getgid();
+	out->pw_dir = my_strdup(getenv("HOME"));
+	out->pw_shell = my_strdup(getenv("SHELL"));
+	return false;
+}
+
+static void write_ns_map(char *map_name, unsigned int id)
+{
+	char *path;
+	CHECK_POSIX(asprintf(&path, "/proc/self/%s_map", map_name));
+
+	FILE *file = fopen(path, "w");
+	if (!file) err(EXIT_FAILURE, "failed to open ns map file: %s", path);
+
+	CHECK_POSIX(fprintf(file, "2000 %d 1\n", id));
+
+	fclose(file);
+	free(path);
+}
 
 static int sandbox(void *args);
 
 int main(int argc, char **argv) 
 {
+	int status, exitstatus, flags;
 	prevent_leaked_file_descriptors();
 
-	oj_args cmd_args;
+	oj_args cmd_args = { .is_root = geteuid() == 0, .orig_uid = getuid(), .orig_gid = getgid() };
+	if (getuid() == 0)
+	{
+		errx(EXIT_FAILURE, "Running a sandbox as root is not advised. "
+		                   "You may either add a setsuid bit to it and run it as an unprivileged user, "
+		                   "or run as an unprivileged user, and let the sandbox use CLONE_NEWUSER");
+	}
 	parse_args(argc,argv,&cmd_args);
 
 	char sandbox_stack[STACK_SIZE]; //reuse our own stack for the child
 
-	int flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
+	flags = CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
+	if (!cmd_args.is_root)
+		flags |= CLONE_NEWUSER;
 	pid_t pid = clone(sandbox, sandbox_stack + STACK_SIZE, flags, &cmd_args);
-	CHECK_POSIX(pid);
-	int status = 0;
+	CHECK_POSIX_ARGS(pid, "clone (%d)", pid);
+
+	status = 0;
 	waitpid(pid, &status, 0);
-	int exitstatus = WEXITSTATUS(status);
+	exitstatus = WEXITSTATUS(status);
 	return exitstatus;
 }
 
 int sandbox(void *my_args) 
 {
 	const oj_args *args = my_args;
+	if (!args->is_root)
+	{
+		// first check if /proc/self/setgroups exists (see user_namespaces(7))
+		// (this is relevant for newer kernels, which only allow setting gid mapping
+		// if setgroups is set to deny)
+		if (access("/proc/self/setgroups", F_OK) >= 0)
+		{
+			FILE *f = fopen("/proc/self/setgroups", "w");
+			if (!f) err(EXIT_FAILURE, "Cannot open /proc/self/setgroups for writing");
+			CHECK_POSIX(fprintf(f,"deny\n"));
+			fclose(f);
+		}
+		// if we unshared a new user namespace,
+		// we must define a uid/gid mapping
+		write_ns_map("uid", args->orig_uid);
+		write_ns_map("gid", args->orig_gid);
+	}
+
 	scmp_filter_ctx ctx = seccomp_init(args->learn_name ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
 	if (!ctx) errx(EXIT_FAILURE, "seccomp_init");
 
@@ -533,17 +613,17 @@ int sandbox(void *my_args)
 		CHECK_POSIX_ARGS(chdir("/"), "entering chroot `%s` failed", args->root);
 
 		errno = 0;
-		struct passwd *pw = getpwuid(getuid());
-		if (!pw) err(EXIT_FAILURE, "getpwuid");
+		struct passwd pw;
+		bool did_found = get_pw(args, &pw);
 
 		// check if exists
-		if (access(pw->pw_dir, F_OK) >= 0)
+		if (access(pw.pw_dir, F_OK) >= 0)
 		{
 			if (args->mount_tmpfs)
-				MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
+				MOUNTX(NULL, pw.pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
 
 			// switch to the user's home directory as a login shell would
-			CHECK_POSIX(chdir(pw->pw_dir));
+			CHECK_POSIX(chdir(pw.pw_dir));
 		} else {
 			CHECK_POSIX(chdir("/"));
 		}
@@ -552,18 +632,23 @@ int sandbox(void *my_args)
 		// create a new session
 		CHECK_POSIX(setsid());
 
-		CHECK_POSIX(initgroups(pw->pw_name, pw->pw_gid));
-		CHECK_POSIX(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid));
-		CHECK_POSIX(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid));
+		if (did_found)
+			CHECK_POSIX(initgroups(pw.pw_name, pw.pw_gid));
+		CHECK_POSIX(setresuid(pw.pw_uid, pw.pw_uid, pw.pw_uid));
+		CHECK_POSIX(setresgid(pw.pw_gid, pw.pw_gid, pw.pw_gid));
 
 		char path[] = "PATH=/usr/local/bin:/usr/bin:/bin";
 		char *env[] = {path, NULL, NULL, NULL, NULL};
-		if ((asprintf(env + 1, "HOME=%s", pw->pw_dir) < 0 ||
-		     asprintf(env + 2, "USER=%s", pw->pw_name) < 0 ||
-		     asprintf(env + 3, "LOGNAME=%s", pw->pw_name) < 0)) 
+		if ((asprintf(env + 1, "HOME=%s", pw.pw_dir) < 0 ||
+		     asprintf(env + 2, "USER=%s", pw.pw_name) < 0 ||
+		     asprintf(env + 3, "LOGNAME=%s", pw.pw_name) < 0)) 
 		{
 			errx(EXIT_FAILURE, "asprintf");
 		}
+
+		if (pw.pw_name) free(pw.pw_name);
+		if (pw.pw_dir) free(pw.pw_dir);
+		if (pw.pw_shell) free(pw.pw_shell);
 
 		if (args->learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
 
