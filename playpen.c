@@ -253,7 +253,6 @@ _Noreturn static void usage(FILE *out) {
           " -e, --mbs-check-every       sets the internal, in ms, to check the memory usage for the MB-s accumulator\n"
           " -b, --bind                  bind mount a read-only directory in the container\n"
           " -B, --bind-rw               bind mount a directory in the container\n"
-          " -u, --user=USER             the user to run the program as\n"
           " -n, --hostname=NAME         the hostname to set the container to\n"
           " -t, --timeout=INTEGER       how long the container is allowed to run\n"
           " -m, --memory-limit=LIMIT    the memory limit of the container\n"
@@ -418,7 +417,6 @@ int sandbox(void *my_args) {
 				 rlimit_cpu = -1;
     long max_mbs = -1,
          mbs_check_every = 250;
-    const char *username = "nobody";
     const char *hostname = "playpen";
     long timeout = 0;
     long memory_limit = 128;
@@ -444,7 +442,6 @@ int sandbox(void *my_args) {
         { "mbs-check-every",required_argument,0, 'e' },
         { "bind",          required_argument, 0, 'b' },
         { "bind-rw",       required_argument, 0, 'B' },
-        { "user",          required_argument, 0, 'u' },
         { "hostname",      required_argument, 0, 'n' },
         { "timeout",       required_argument, 0, 't' },
         { "memory-limit",  required_argument, 0, 'm' },
@@ -509,9 +506,6 @@ int sandbox(void *my_args) {
             } else {
                 binds = binds_tail = bind_list_alloc(optarg, opt == 'b');
             }
-            break;
-        case 'u':
-            username = optarg;
             break;
         case 'n':
             hostname = optarg;
@@ -708,14 +702,8 @@ int sandbox(void *my_args) {
         CHECK_POSIX(chdir("/"), "entering chroot `%s` failed", root);
 
         errno = 0;
-        struct passwd *pw = getpwnam(username);
-        if (!pw) {
-            if (errno) {
-                err(EXIT_FAILURE, "getpwnam");
-            } else {
-                errx(EXIT_FAILURE, "no passwd entry for username %s", username);
-            }
-        }
+        struct passwd *pw = getpwuid(getuid());
+        if (!pw) err(EXIT_FAILURE, "getpwuid");
 
         // check if exists
         if (access(pw->pw_dir, F_OK) >= 0)
@@ -733,15 +721,15 @@ int sandbox(void *my_args) {
         // create a new session
         CHECK_POSIX(setsid(), "setsid");
 
-        CHECK_POSIX(initgroups(username, pw->pw_gid), "initgroups");
+        CHECK_POSIX(initgroups(pw->pw_name, pw->pw_gid), "initgroups");
         CHECK_POSIX(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid), "setresgid");
         CHECK_POSIX(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid), "setresuid");
 
         char path[] = "PATH=/usr/local/bin:/usr/bin:/bin";
         char *env[] = {path, NULL, NULL, NULL, NULL};
         if ((asprintf(env + 1, "HOME=%s", pw->pw_dir) < 0 ||
-             asprintf(env + 2, "USER=%s", username) < 0 ||
-             asprintf(env + 3, "LOGNAME=%s", username) < 0)) {
+             asprintf(env + 2, "USER=%s", pw->pw_name) < 0 ||
+             asprintf(env + 3, "LOGNAME=%s", pw->pw_name) < 0)) {
             errx(EXIT_FAILURE, "asprintf");
         }
 
