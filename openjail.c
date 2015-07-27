@@ -1,13 +1,9 @@
-#include <stdbool.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include "openjail.h"
 
 #include <dirent.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <grp.h>
 #include <linux/capability.h>
 #include <linux/limits.h>
@@ -38,12 +34,6 @@
 
 #define EXIT_TIMEOUT 3
 #define EXIT_MB_S 4
-
-typedef struct 
-{
-	int argc;
-	char **argv;
-} args;
 
 static void check(int rc) 
 {
@@ -83,25 +73,6 @@ static void mountx(char *file, int line, const char *source, const char *target,
 {
 	check_posix(file,line,mount(source, target, filesystemtype, mountflags, data),
 			"mounting %s as %s (%s) failed", source, target, filesystemtype);
-}
-
-struct bind_list 
-{
-	struct bind_list *next;
-	bool read_only;
-	char arg[];
-};
-
-static struct bind_list *bind_list_alloc(const char *arg, bool read_only) 
-{
-	size_t len = strlen(arg);
-	struct bind_list *next = malloc(sizeof(struct bind_list) + len + 1);
-	if (!next) err(EXIT_FAILURE, "malloc");
-
-	next->next = NULL;
-	next->read_only = read_only;
-	strcpy(next->arg, arg);
-	return next;
 }
 
 static void bind_list_apply(const char *root, struct bind_list *list) 
@@ -254,37 +225,6 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
 	return old_mbs;
 }
 
-_Noreturn static void usage(FILE *out) 
-{
-	fprintf(out, "usage: %s [options] [root] [command ...]\n", program_invocation_short_name);
-	fputs("Options:\n"
-			" -h, --help                  display this help\n"
-			" -v, --version               display version\n"
-			" -p, --mount-proc            mount /proc in the container\n"
-			"     --mount-dev             mount /dev as devtmpfs in the container\n"
-			"     --mount-tmpfs           mount tmpfs containers\n"
-			"     --mount-minimal         mount minimal /dev\n"
-			"     --rlimit-as=VALUE       sets the rlimit max virtual memory of the process, in bytes\n"
-			"     --rlimit-cpu=VALUE      sets the rlimit max CPU time, in seconds\n"
-			"     --rlimit-fsize=VALUE    sets the rlimit max file size of a single file, in bytes\n"
-			"     --rlimit-nofile=VALUE   sets the rlimit max number of open files\n"
-			"     --rlimit-nproc=VALUE    sets the rlimit max number of open processes\n"
-			"     --rlimit-nice=VALUE     sets the rlimit min number of nice (set as 20 + nice_value. seee rlimit manpage)\n"
-			" -x, --max-mbs               sets the maximum accumulated MB-s that the process can use\n"
-			" -e, --mbs-check-every       sets the internal, in ms, to check the memory usage for the MB-s accumulator\n"
-			" -b, --bind                  bind mount a read-only directory in the container\n"
-			" -B, --bind-rw               bind mount a directory in the container\n"
-			" -n, --hostname=NAME         the hostname to set the container to\n"
-			" -t, --timeout=INTEGER       how long the container is allowed to run\n"
-			" -m, --memory-limit=LIMIT    the memory limit of the container\n"
-			" -s, --syscalls=LIST         comma-separated whitelist of syscalls\n"
-			" -S, --syscalls-file=PATH    whitelist file containing one syscall name per line\n"
-			" -l, --learn=PATH            allow unwhitelisted syscalls and append them to a file\n",
-		out);
-
-	exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
-}
-
 static void set_non_blocking(int fd) 
 {
 	int flags = fcntl(fd, F_GETFL, 0);
@@ -308,17 +248,6 @@ static void prevent_leaked_file_descriptors()
 		}
 	}
 	closedir(dir);
-}
-
-static long strtolx_positive(const char *s, const char *what) 
-{
-	char *end;
-	errno = 0;
-	long result = strtol(s, &end, 10);
-	if (errno) errx(EXIT_FAILURE, "%s is too large", what);
-	if (*end != '\0' || result < 0)
-		errx(EXIT_FAILURE, "%s must be a positive integer", what);
-	return result;
 }
 
 static void do_trace(const struct signalfd_siginfo *si, bool *trace_init, FILE *learn) 
@@ -421,9 +350,9 @@ int main(int argc, char **argv)
 {
 	prevent_leaked_file_descriptors();
 
-	args cmd_args;
-	cmd_args.argc = argc;
-	cmd_args.argv = argv;
+	oj_args cmd_args;
+	parse_args(argc,argv,&cmd_args);
+
 	char sandbox_stack[STACK_SIZE]; //reuse our own stack for the child
 
 	int flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
@@ -437,154 +366,15 @@ int main(int argc, char **argv)
 
 int sandbox(void *my_args) 
 {
-	args *args = my_args;
-	int argc = args->argc;
-	char **argv = args->argv;
-
-	bool mount_proc = false;
-	bool mount_dev = false;
-	bool mount_tmpfs = false;
-	bool mount_minimal_dev = false;
-	long rlimit_as = -1,
-			 rlimit_fsize = -1,
-			 rlimit_nofile = -1,
-			 rlimit_nproc = -1,
-			 rlimit_nice = -1,
-			 rlimit_cpu = -1;
-	long max_mbs = -1,
-			 mbs_check_every = 250;
-	const char *hostname = "openjail";
-	long timeout = 0;
-	long memory_limit = 128;
-	struct bind_list *binds = NULL, *binds_tail = NULL;
-	char *syscalls = NULL;
-	const char *syscalls_file = NULL;
-	const char *learn_name = NULL;
-
-	static const struct option opts[] = {
-		{ "help",          no_argument,       0, 'h' },
-		{ "version",       no_argument,       0, 'v' },
-		{ "mount-proc",    no_argument,       0, 'p' },
-		{ "mount-dev",     no_argument,       0, 0x100 },
-		{ "mount-tmpfs",   no_argument,       0, 0x101 },
-		{ "mount-minimal", no_argument,       0, 0x102 },
-		{ "rlimit-as",     required_argument, 0, 0x200 },
-		{ "rlimit-fsize",  required_argument, 0, 0x201 },
-		{ "rlimit-nofile", required_argument, 0, 0x202 },
-		{ "rlimit-nproc",  required_argument, 0, 0x203 },
-		{ "rlimit-nice",   required_argument, 0, 0x204 },
-		{ "rlimit-cpu",    required_argument, 0, 0x205 },
-		{ "max-mbs",       required_argument, 0, 'x' },
-		{ "mbs-check-every",required_argument,0, 'e' },
-		{ "bind",          required_argument, 0, 'b' },
-		{ "bind-rw",       required_argument, 0, 'B' },
-		{ "hostname",      required_argument, 0, 'n' },
-		{ "timeout",       required_argument, 0, 't' },
-		{ "memory-limit",  required_argument, 0, 'm' },
-		{ "syscalls",      required_argument, 0, 's' },
-		{ "syscalls-file", required_argument, 0, 'S' },
-		{ "learn",         required_argument, 0, 'l' },
-		{ 0, 0, 0, 0 }
-	};
-
-	for (;;) 
-	{
-		int opt = getopt_long(argc, argv, "hvpx:e:b:B:u:n:t:m:d:s:S:l:", opts, NULL);
-		if (opt == -1)
-			break;
-
-		switch (opt) 
-		{
-			case 'h':
-				usage(stdout);
-			case 'v':
-				printf("%s %s\n", program_invocation_short_name, VERSION);
-				return 0;
-			case 'p':
-				mount_proc = true;
-				break;
-			case 0x100:
-				mount_dev = true;
-				break;
-			case 0x101:
-				mount_tmpfs = true;
-				break;
-			case 0x102:
-				mount_minimal_dev = true;
-				break;
-			case 0x200:
-				rlimit_as = strtolx_positive(optarg, "rlimit-as");
-				break;
-			case 0x201:
-				rlimit_fsize = strtolx_positive(optarg, "rlimit-fsize");
-				break;
-			case 0x202:
-				rlimit_nofile = strtolx_positive(optarg, "rlimit-nofile");
-				break;
-			case 0x203:
-				rlimit_nproc = strtolx_positive(optarg, "rlimit-nproc");
-				break;
-			case 0x204:
-				rlimit_nice = strtolx_positive(optarg, "rlimit-nice");
-				break;
-			case 0x205:
-				rlimit_cpu = strtolx_positive(optarg, "rlimit-cpu");
-				break;
-			case 'x':
-				max_mbs = strtolx_positive(optarg, "max-mbs");
-				break;
-			case 'e':
-				mbs_check_every = strtolx_positive(optarg, "mbs-check-every");
-				break;
-			case 'b':
-			case 'B':
-				if (binds) 
-				{
-					binds_tail->next = bind_list_alloc(optarg, opt == 'b');
-					binds_tail = binds_tail->next;
-				} else {
-					binds = binds_tail = bind_list_alloc(optarg, opt == 'b');
-				}
-				break;
-			case 'n':
-				hostname = optarg;
-				break;
-			case 't':
-				timeout = strtolx_positive(optarg, "timeout");
-				break;
-			case 'm':
-				memory_limit = strtolx_positive(optarg, "memory limit");
-				break;
-			case 's':
-				syscalls = optarg;
-				break;
-			case 'S':
-				syscalls_file = optarg;
-				break;
-			case 'l':
-				learn_name = optarg;
-				break;
-			default:
-				usage(stderr);
-		}
-	}
-
-	if (argc - optind < 2) 
-	{
-		usage(stderr);
-	}
-
-	const char *root = argv[optind];
-	optind++;
-
-	scmp_filter_ctx ctx = seccomp_init(learn_name ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
+	const oj_args *args = my_args;
+	scmp_filter_ctx ctx = seccomp_init(args->learn_name ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
 	if (!ctx) errx(EXIT_FAILURE, "seccomp_init");
 
-	if (syscalls_file) 
+	if (args->syscalls_file) 
 	{
 		char name[SYSCALL_NAME_MAX];
-		FILE *file = fopen(syscalls_file, "r");
-		if (!file) err(EXIT_FAILURE, "failed to open syscalls file: %s", syscalls_file);
+		FILE *file = fopen(args->syscalls_file, "r");
+		if (!file) err(EXIT_FAILURE, "failed to open syscalls file: %s", args->syscalls_file);
 		while (fgets(name, sizeof name, file)) 
 		{
 			char *pos;
@@ -596,9 +386,9 @@ int sandbox(void *my_args)
 
 	check(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, __NR_execve, 0));
 
-	if (syscalls) 
+	if (args->syscalls) 
 	{
-		for (char *s_ptr = syscalls, *saveptr; ; s_ptr = NULL) 
+		for (char *s_ptr = args->syscalls, *saveptr; ; s_ptr = NULL) 
 		{
 			const char *syscall = strtok_r(s_ptr, ",", &saveptr);
 			if (!syscall) break;
@@ -668,37 +458,37 @@ int sandbox(void *my_args)
 		uint8_t ready;
 		CHECK_POSIX(read(STDIN_FILENO, &ready, sizeof ready), "read");
 
-		CHECK_POSIX(sethostname(hostname, strlen(hostname)), "sethostname");
+		CHECK_POSIX(sethostname(args->hostname, strlen(args->hostname)), "sethostname");
 
 		// avoid propagating mounts to or from the parent's mount namespace
 		MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
 
 		// turn directory into a bind mount
-		MOUNTX(root, root, "bind", MS_BIND|MS_REC, NULL);
+		MOUNTX(args->root, args->root, "bind", MS_BIND|MS_REC, NULL);
 
 		// re-mount as read-only
-		MOUNTX(root, root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
+		MOUNTX(args->root, args->root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
 
-		if (mount_proc) 
+		if (args->mount_proc) 
 		{
-			char *mnt = join_path(root, "proc");
+			char *mnt = join_path(args->root, "proc");
 			MOUNTX(NULL, mnt, "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
 			free(mnt);
 		}
 
-		if (mount_dev) 
+		if (args->mount_dev) 
 		{
-			char *mnt = join_path(root, "dev");
+			char *mnt = join_path(args->root, "dev");
 			MOUNTX(NULL, mnt, "devtmpfs", MS_NOSUID|MS_NOEXEC, NULL);
 			free(mnt);
 		}
 
-		if (mount_minimal_dev) 
+		if (args->mount_minimal_dev) 
 		{
 			char *devices[] = { "/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", NULL };
 			for (int i = 0; devices[i] != NULL; i++)
 			{
-				char *mnt = join_path(root, devices[i]);
+				char *mnt = join_path(args->root, devices[i]);
 				if (access(mnt, F_OK) < 0)
 				{
 					errx(EXIT_FAILURE,"The file '%s' was not found inside the chroot jail", mnt);
@@ -708,9 +498,9 @@ int sandbox(void *my_args)
 			}
 		}
 
-		if (mount_tmpfs)
+		if (args->mount_tmpfs)
 		{
-			char *shm = join_path(root, "dev/shm");
+			char *shm = join_path(args->root, "dev/shm");
 			if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) 
 			{
 				if (errno != ENOENT) 
@@ -721,9 +511,9 @@ int sandbox(void *my_args)
 			free(shm);
 		}
 
-		if (mount_tmpfs)
+		if (args->mount_tmpfs)
 		{
-			char *tmp = join_path(root, "tmp");
+			char *tmp = join_path(args->root, "tmp");
 			if (mount(NULL, tmp, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) 
 			{
 				if (errno != ENOENT) 
@@ -734,24 +524,24 @@ int sandbox(void *my_args)
 			free(tmp);
 		}
 
-		set_rlimit(RLIMIT_AS, rlimit_as);
-		set_rlimit(RLIMIT_FSIZE, rlimit_fsize);
-		set_rlimit(RLIMIT_NOFILE, rlimit_nofile);
-		set_rlimit(RLIMIT_NPROC, rlimit_nproc);
-		set_rlimit(RLIMIT_NICE, rlimit_nice);
-		set_rlimit(RLIMIT_CPU, rlimit_cpu);
+		set_rlimit(RLIMIT_AS, args->rlimit_as);
+		set_rlimit(RLIMIT_FSIZE, args->rlimit_fsize);
+		set_rlimit(RLIMIT_NOFILE, args->rlimit_nofile);
+		set_rlimit(RLIMIT_NPROC, args->rlimit_nproc);
+		set_rlimit(RLIMIT_NICE, args->rlimit_nice);
+		set_rlimit(RLIMIT_CPU, args->rlimit_cpu);
 
-		bind_list_apply(root, binds);
+		bind_list_apply(args->root, args->binds);
 
 		// preserve a reference to the target directory
-		CHECK_POSIX(chdir(root), "chdir");
+		CHECK_POSIX(chdir(args->root), "chdir");
 
 		// make the working directory into the root of the mount namespace
 		MOUNTX(".", "/", NULL, MS_MOVE, NULL);
 
 		// chroot into the root of the mount namespace
-		CHECK_POSIX(chroot("."), "chroot into `%s` failed", root);
-		CHECK_POSIX(chdir("/"), "entering chroot `%s` failed", root);
+		CHECK_POSIX(chroot("."), "chroot into `%s` failed", args->root);
+		CHECK_POSIX(chdir("/"), "entering chroot `%s` failed", args->root);
 
 		errno = 0;
 		struct passwd *pw = getpwuid(getuid());
@@ -760,7 +550,7 @@ int sandbox(void *my_args)
 		// check if exists
 		if (access(pw->pw_dir, F_OK) >= 0)
 		{
-			if (mount_tmpfs)
+			if (args->mount_tmpfs)
 				MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
 
 			// switch to the user's home directory as a login shell would
@@ -786,13 +576,13 @@ int sandbox(void *my_args)
 			errx(EXIT_FAILURE, "asprintf");
 		}
 
-		if (learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
+		if (args->learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
 
 		check(seccomp_load(ctx));
-		CHECK_POSIX(execvpe(argv[optind], argv + optind, env), "execvpe");
+		CHECK_POSIX(execvpe(args->cmd[0], args->cmd, env), "execvpe");
 	}
 
-	if (max_mbs) 
+	if (args->max_mbs) 
 	{
 		// avoid propagating mounts to or from the parent's mount namespace
 		MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
@@ -800,13 +590,13 @@ int sandbox(void *my_args)
 		MOUNTX(NULL, "/proc", "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
 	}
 
-	bind_list_free(binds);
+	bind_list_free(args->binds);
 	seccomp_release(ctx);
 
 	FILE *learn = NULL;
-	if (learn_name) 
+	if (args->learn_name) 
 	{
-		learn = fopen(learn_name, "a+");
+		learn = fopen(args->learn_name, "a+");
 		if (!learn) err(EXIT_FAILURE, "fopen");
 	}
 
@@ -815,25 +605,25 @@ int sandbox(void *my_args)
 	set_non_blocking(pipe_in[1]);
 
 	int timer_fd = -1;
-	if (timeout) 
+	if (args->timeout) 
 	{
 		timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
 		CHECK_POSIX(timer_fd, "timerfd_create");
 		epoll_add(epoll_fd, timer_fd, EPOLLIN);
 
-		struct itimerspec spec = { .it_value = { .tv_sec = timeout } };
+		struct itimerspec spec = { .it_value = { .tv_sec = args->timeout } };
 		CHECK_POSIX(timerfd_settime(timer_fd, 0, &spec, NULL), "timerfd_settime");
 	}
 
 	int mbs_fd = -1;
-	if (max_mbs > 0) 
+	if (args->max_mbs > 0) 
 	{
 		mbs_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
 		CHECK_POSIX(mbs_fd, "timerfd_create");
 		epoll_add(epoll_fd, mbs_fd, EPOLLIN);
 
-		long secs = mbs_check_every / 1000;
-		struct timespec t = { .tv_sec = secs, .tv_nsec = (mbs_check_every % 1000) * 1000000 };
+		long secs = args->mbs_check_every / 1000;
+		struct timespec t = { .tv_sec = secs, .tv_nsec = (args->mbs_check_every % 1000) * 1000000 };
 		struct itimerspec spec = { .it_interval = t, .it_value = t };
 		CHECK_POSIX(timerfd_settime(mbs_fd, 0, &spec, NULL), "timerfd_settime");
 	}
@@ -870,8 +660,8 @@ int sandbox(void *my_args)
 			{
 				if (evt->data.fd == mbs_fd) 
 				{
-					current_mbs = calculate_mbs(current_mbs, &last_time, max_mbs);
-					if (current_mbs >= max_mbs) 
+					current_mbs = calculate_mbs(current_mbs, &last_time, args->max_mbs);
+					if (current_mbs >= args->max_mbs) 
 					{
 						warnx("MB-s cap reached!");
 						kill(pid, SIGKILL);
