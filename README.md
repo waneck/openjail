@@ -6,7 +6,7 @@ built on top of `playpen`
 * The application is contained inside a read-only root directory with `chroot`.
 * A mount namespace is leveraged to provide writable /tmp, /dev/tmp and home
   directories as in-memory (tmpfs) filesystems. Since these mounts are private,
-  any number of Playpen instances can share the same root.
+  any number of Openjail instances can share the same root.
 * The memory of all contained processes is limited via the scope unit's memory
   control group. The memory control group will include usage of the private
   tmpfs mounts towards the total.
@@ -29,10 +29,10 @@ built on top of `playpen`
     pacstrap -cd sandbox
 
     # run `ls -l` in the sandbox and create a system call whitelist
-    playpen sandbox -l whitelist -- ls -l /
+    openjail sandbox -l whitelist -- ls -l /
 
     # run it again, enforcing the learned system call whitelist
-    playpen sandbox -S whitelist -- ls -l /
+    openjail sandbox -S whitelist -- ls -l /
 
 # Dependencies
 
