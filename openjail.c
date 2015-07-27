@@ -2,24 +2,19 @@
 #include "helpers.h"
 
 #include <dirent.h>
-#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/capability.h>
-#include <linux/limits.h>
 #include <pwd.h>
 #include <unistd.h>
 #include <sched.h>
-#include <signal.h>
 #include <sys/epoll.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/signalfd.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/timerfd.h>
 #include <sys/reg.h>
 #include <sys/wait.h>
@@ -29,7 +24,6 @@
 
 #define SYSCALL_NAME_MAX 30
 #define STACK_SIZE 512 * 1024
-
 #define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
 
 #define EXIT_TIMEOUT 3

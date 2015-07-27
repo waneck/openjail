@@ -11,7 +11,6 @@
 #include <sys/ptrace.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
-#include <signal.h>
 #include <errno.h>
 
 #include <seccomp.h>
