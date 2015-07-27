@@ -1,4 +1,5 @@
 #include "openjail.h"
+#include "helpers.h"
 
 #include <dirent.h>
 #include <err.h>
@@ -29,18 +30,12 @@
 #define SYSCALL_NAME_MAX 30
 #define STACK_SIZE 512 * 1024
 
-#define CHECK_POSIX(rc,...) check_posix(__FILE__,__LINE__,rc,__VA_ARGS__)
 #define MOUNTX(source, target, fstype, mountflags, data) mountx(__FILE__,__LINE__,source,target,fstype,mountflags,data)
 
 #define EXIT_TIMEOUT 3
 #define EXIT_MB_S 4
 
-static void check(int rc) 
-{
-	if (rc < 0) errx(EXIT_FAILURE, "%s", strerror(-rc));
-}
-
-__attribute__((format(printf, 4, 5))) static void check_posix(char *file, int line, intmax_t rc, const char *fmt, ...) 
+__attribute__((format(printf, 4, 5))) static void my_check_posix(char *file, int line, intmax_t rc, const char *fmt, ...) 
 {
 	va_list args;
 	va_start(args, fmt);
@@ -64,15 +59,15 @@ __attribute__((format(printf, 2, 3))) static bool check_eagain(intmax_t rc, cons
 static char *join_path(const char *left, const char *right) 
 {
 	char *dst;
-	CHECK_POSIX(asprintf(&dst, "%s/%s", left, right), "asprintf");
+	CHECK_POSIX(asprintf(&dst, "%s/%s", left, right));
 	return dst;
 }
 
 static void mountx(char *file, int line, const char *source, const char *target, 
                    const char *filesystemtype, unsigned long mountflags, const void *data) 
 {
-	check_posix(file,line,mount(source, target, filesystemtype, mountflags, data),
-			"mounting %s as %s (%s) failed", source, target, filesystemtype);
+	my_check_posix(file,line,mount(source, target, filesystemtype, mountflags, data),
+	               "mounting %s as %s (%s) failed", source, target, filesystemtype);
 }
 
 static void bind_list_apply(const char *root, struct bind_list *list) 
@@ -101,7 +96,7 @@ static void bind_list_free(struct bind_list *list) {
 static void epoll_add(int epoll_fd, int fd, uint32_t events) 
 {
 	struct epoll_event event = { .data.fd = fd, .events = events };
-	CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event), "epoll_ctl");
+	CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event));
 }
 
 static void copy_to_stdstream(int in_fd, int out_fd) 
@@ -109,7 +104,7 @@ static void copy_to_stdstream(int in_fd, int out_fd)
 	uint8_t buffer[BUFSIZ];
 	ssize_t n = read(in_fd, buffer, sizeof buffer);
 	if (check_eagain(n, "read")) return;
-	CHECK_POSIX(write(out_fd, buffer, (size_t)n), "write");
+	CHECK_POSIX(write(out_fd, buffer, (size_t)n));
 }
 
 static int get_syscall_nr(const char *name) 
@@ -129,14 +124,14 @@ static void set_rlimit(int resource, long value)
 		return;
 	rlim.rlim_cur = (rlim_t) value;
 	rlim.rlim_max = (rlim_t) value;
-	CHECK_POSIX(setrlimit((unsigned int) resource, &rlim), "set_rlimit %d", resource);
+	CHECK_POSIX_ARGS(setrlimit((unsigned int) resource, &rlim), "set_rlimit %d", resource);
 }
 
 static void drop_capabilities() 
 {
 	// once we drop the privileges, we should never regain them
 	// by e.g. executing a suid-root binary
-	CHECK_POSIX(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), "ptrcl set no new privs");
+	CHECK_POSIX(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
 
 	for (int i = 0; i <= 63; i++) 
 	{
@@ -162,7 +157,7 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
 {
 	// get interval, in ms
 	struct timespec current;
-	CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &current), "clock_gettime");
+	CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &current));
 	time_t diff_ms = (current.tv_sec - last_time->tv_sec) * 1000;
 	diff_ms += (current.tv_nsec - last_time->tv_nsec) / 1.0e6; // convert nanoseconds to miliseconds
 	double elapsed_secs = ( (double) diff_ms ) / 1000.0;
@@ -181,7 +176,7 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
 		if (*end == '\0') {
 			// read smaps
 			char *path;
-			CHECK_POSIX(asprintf(&path, "/proc/%s/smaps", dp->d_name), "asprintf");
+			CHECK_POSIX(asprintf(&path, "/proc/%s/smaps", dp->d_name));
 			FILE *stream = fopen(path, "r");
 			if (NULL == stream)
 				err(EXIT_FAILURE, "fopen(%s)", path);
@@ -228,8 +223,8 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
 static void set_non_blocking(int fd) 
 {
 	int flags = fcntl(fd, F_GETFL, 0);
-	CHECK_POSIX(flags, "fcntl");
-	CHECK_POSIX(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+	CHECK_POSIX(flags);
+	CHECK_POSIX(fcntl(fd, F_SETFL, flags | O_NONBLOCK));
 }
 
 // Mark any extra file descriptors `CLOEXEC`. Only `stdin`, `stdout` and `stderr` are left open.
@@ -244,7 +239,7 @@ static void prevent_leaked_file_descriptors()
 		int fd = (int)strtol(dp->d_name, &end, 10);
 		if (*end == '\0' && fd > 2 && fd != dirfd(dir)) 
 		{
-			CHECK_POSIX(ioctl(fd, FIOCLEX), "ioctl");
+			CHECK_POSIX(ioctl(fd, FIOCLEX));
 		}
 	}
 	closedir(dir);
@@ -295,10 +290,10 @@ static void do_trace(const struct signalfd_siginfo *si, bool *trace_init, FILE *
 			}
 		}
 	} else {
-		CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, si->ssi_pid, 0, PTRACE_O_TRACESECCOMP), "ptrace");
+		CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, si->ssi_pid, 0, PTRACE_O_TRACESECCOMP));
 		*trace_init = true;
 	}
-	CHECK_POSIX(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal), "ptrace");
+	CHECK_POSIX(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal));
 }
 
 static void handle_signal(int sig_fd, pid_t child_fd,
@@ -306,7 +301,7 @@ static void handle_signal(int sig_fd, pid_t child_fd,
 {
 	struct signalfd_siginfo si;
 	ssize_t bytes_r = read(sig_fd, &si, sizeof(si));
-	CHECK_POSIX(bytes_r, "read");
+	CHECK_POSIX(bytes_r);
 
 	if (bytes_r != sizeof(si))
 		errx(EXIT_FAILURE, "read the wrong amount of bytes");
@@ -357,7 +352,7 @@ int main(int argc, char **argv)
 
 	int flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
 	pid_t pid = clone(sandbox, sandbox_stack + STACK_SIZE, flags, &cmd_args);
-	CHECK_POSIX(pid, "clone");
+	CHECK_POSIX(pid);
 	int status = 0;
 	waitpid(pid, &status, 0);
 	int exitstatus = WEXITSTATUS(status);
@@ -379,12 +374,12 @@ int sandbox(void *my_args)
 		{
 			char *pos;
 			if ((pos = strchr(name, '\n'))) *pos = '\0';
-			check(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(name), 0));
+			CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(name), 0));
 		}
 		fclose(file);
 	}
 
-	check(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, __NR_execve, 0));
+	CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, __NR_execve, 0));
 
 	if (args->syscalls) 
 	{
@@ -392,12 +387,12 @@ int sandbox(void *my_args)
 		{
 			const char *syscall = strtok_r(s_ptr, ",", &saveptr);
 			if (!syscall) break;
-			check(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(syscall), 0));
+			CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(syscall), 0));
 		}
 	}
 
 	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-	CHECK_POSIX(epoll_fd, "epoll_create1");
+	CHECK_POSIX(epoll_fd);
 
 	sigset_t mask;
 	sigemptyset(&mask);
@@ -406,20 +401,20 @@ int sandbox(void *my_args)
 	sigaddset(&mask, SIGINT);
 	sigaddset(&mask, SIGTERM);
 
-	CHECK_POSIX(sigprocmask(SIG_BLOCK, &mask, NULL), "sigprocmask");
+	CHECK_POSIX(sigprocmask(SIG_BLOCK, &mask, NULL));
 
 	int sig_fd = signalfd(-1, &mask, SFD_CLOEXEC);
-	CHECK_POSIX(sig_fd, "signalfd");
+	CHECK_POSIX(sig_fd);
 
 	epoll_add(epoll_fd, sig_fd, EPOLLIN);
 
 	int pipe_in[2];
 	int pipe_out[2];
 	int pipe_err[2];
-	CHECK_POSIX(pipe(pipe_in), "pipe");
-	CHECK_POSIX(pipe(pipe_out), "pipe");
+	CHECK_POSIX(pipe(pipe_in));
+	CHECK_POSIX(pipe(pipe_out));
 	set_non_blocking(pipe_out[0]);
-	CHECK_POSIX(pipe(pipe_err), "pipe");
+	CHECK_POSIX(pipe(pipe_err));
 	set_non_blocking(pipe_err[0]);
 
 	int rc = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, STDIN_FILENO,
@@ -432,7 +427,7 @@ int sandbox(void *my_args)
 	epoll_add(epoll_fd, pipe_in[1], EPOLLET | EPOLLOUT);
 
 	pid_t pid = fork();
-	CHECK_POSIX(pid, "fork");
+	CHECK_POSIX(pid);
 
 	if (pid == 0) 
 	{
@@ -451,14 +446,14 @@ int sandbox(void *my_args)
 		// Kill this process if the parent dies. This is not a replacement for killing the sandboxed
 		// processes via a control group as it is not inherited by child processes, but is more
 		// robust when the sandboxed process is not allowed to fork.
-		CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL), "prctl");
+		CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL));
 
 		// Wait until the scope unit is set up before moving on. This also ensures that the parent
 		// didn't die before `prctl` was called.
 		uint8_t ready;
-		CHECK_POSIX(read(STDIN_FILENO, &ready, sizeof ready), "read");
+		CHECK_POSIX(read(STDIN_FILENO, &ready, sizeof ready));
 
-		CHECK_POSIX(sethostname(args->hostname, strlen(args->hostname)), "sethostname");
+		CHECK_POSIX(sethostname(args->hostname, strlen(args->hostname)));
 
 		// avoid propagating mounts to or from the parent's mount namespace
 		MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
@@ -493,7 +488,7 @@ int sandbox(void *my_args)
 				{
 					errx(EXIT_FAILURE,"The file '%s' was not found inside the chroot jail", mnt);
 				}
-				CHECK_POSIX(mount(devices[i], mnt, NULL, MS_BIND, NULL), "mount");
+				CHECK_POSIX(mount(devices[i], mnt, NULL, MS_BIND, NULL));
 				free(mnt);
 			}
 		}
@@ -534,14 +529,14 @@ int sandbox(void *my_args)
 		bind_list_apply(args->root, args->binds);
 
 		// preserve a reference to the target directory
-		CHECK_POSIX(chdir(args->root), "chdir");
+		CHECK_POSIX(chdir(args->root));
 
 		// make the working directory into the root of the mount namespace
 		MOUNTX(".", "/", NULL, MS_MOVE, NULL);
 
 		// chroot into the root of the mount namespace
-		CHECK_POSIX(chroot("."), "chroot into `%s` failed", args->root);
-		CHECK_POSIX(chdir("/"), "entering chroot `%s` failed", args->root);
+		CHECK_POSIX_ARGS(chroot("."), "chroot into `%s` failed", args->root);
+		CHECK_POSIX_ARGS(chdir("/"), "entering chroot `%s` failed", args->root);
 
 		errno = 0;
 		struct passwd *pw = getpwuid(getuid());
@@ -554,32 +549,32 @@ int sandbox(void *my_args)
 				MOUNTX(NULL, pw->pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
 
 			// switch to the user's home directory as a login shell would
-			CHECK_POSIX(chdir(pw->pw_dir), "chdir");
+			CHECK_POSIX(chdir(pw->pw_dir));
 		} else {
-			CHECK_POSIX(chdir("/"), "chdir");
+			CHECK_POSIX(chdir("/"));
 		}
 
 		drop_capabilities();
 		// create a new session
-		CHECK_POSIX(setsid(), "setsid");
+		CHECK_POSIX(setsid());
 
-		CHECK_POSIX(initgroups(pw->pw_name, pw->pw_gid), "initgroups");
-		CHECK_POSIX(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid), "setresgid");
-		CHECK_POSIX(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid), "setresuid");
+		CHECK_POSIX(initgroups(pw->pw_name, pw->pw_gid));
+		CHECK_POSIX(setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid));
+		CHECK_POSIX(setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid));
 
 		char path[] = "PATH=/usr/local/bin:/usr/bin:/bin";
 		char *env[] = {path, NULL, NULL, NULL, NULL};
 		if ((asprintf(env + 1, "HOME=%s", pw->pw_dir) < 0 ||
-					asprintf(env + 2, "USER=%s", pw->pw_name) < 0 ||
-					asprintf(env + 3, "LOGNAME=%s", pw->pw_name) < 0)) 
+		     asprintf(env + 2, "USER=%s", pw->pw_name) < 0 ||
+		     asprintf(env + 3, "LOGNAME=%s", pw->pw_name) < 0)) 
 		{
 			errx(EXIT_FAILURE, "asprintf");
 		}
 
-		if (args->learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
+		if (args->learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
 
-		check(seccomp_load(ctx));
-		CHECK_POSIX(execvpe(args->cmd[0], args->cmd, env), "execvpe");
+		CHECK(seccomp_load(ctx));
+		CHECK_POSIX(execvpe(args->cmd[0], args->cmd, env));
 	}
 
 	if (args->max_mbs) 
@@ -601,31 +596,31 @@ int sandbox(void *my_args)
 	}
 
 	// Inform the child that the scope unit has been created.
-	CHECK_POSIX(write(pipe_in[1], &(uint8_t) { 0 }, 1), "write");
+	CHECK_POSIX(write(pipe_in[1], &(uint8_t) { 0 }, 1));
 	set_non_blocking(pipe_in[1]);
 
 	int timer_fd = -1;
 	if (args->timeout) 
 	{
 		timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-		CHECK_POSIX(timer_fd, "timerfd_create");
+		CHECK_POSIX(timer_fd);
 		epoll_add(epoll_fd, timer_fd, EPOLLIN);
 
 		struct itimerspec spec = { .it_value = { .tv_sec = args->timeout } };
-		CHECK_POSIX(timerfd_settime(timer_fd, 0, &spec, NULL), "timerfd_settime");
+		CHECK_POSIX(timerfd_settime(timer_fd, 0, &spec, NULL));
 	}
 
 	int mbs_fd = -1;
 	if (args->max_mbs > 0) 
 	{
 		mbs_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-		CHECK_POSIX(mbs_fd, "timerfd_create");
+		CHECK_POSIX(mbs_fd);
 		epoll_add(epoll_fd, mbs_fd, EPOLLIN);
 
 		long secs = args->mbs_check_every / 1000;
 		struct timespec t = { .tv_sec = secs, .tv_nsec = (args->mbs_check_every % 1000) * 1000000 };
 		struct itimerspec spec = { .it_interval = t, .it_value = t };
-		CHECK_POSIX(timerfd_settime(mbs_fd, 0, &spec, NULL), "timerfd_settime");
+		CHECK_POSIX(timerfd_settime(mbs_fd, 0, &spec, NULL));
 	}
 
 	uint8_t stdin_buffer[PIPE_BUF];
@@ -633,7 +628,7 @@ int sandbox(void *my_args)
 	bool trace_init = false;
 	double current_mbs = 0;
 	struct timespec last_time;
-	CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &last_time), "clock_gettime");
+	CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &last_time));
 
 	for (;;) 
 	{
@@ -681,11 +676,10 @@ int sandbox(void *my_args)
 					copy_to_stdstream(pipe_err[0], STDERR_FILENO);
 				} else if (evt->data.fd == STDIN_FILENO) {
 					stdin_bytes_read = read(STDIN_FILENO, stdin_buffer, sizeof stdin_buffer);
-					CHECK_POSIX(stdin_bytes_read, "read");
+					CHECK_POSIX(stdin_bytes_read);
 					if (stdin_bytes_read == 0) 
 					{
-						CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
-						            "epoll_ctl");
+						CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL));
 						close(STDIN_FILENO);
 						close(pipe_in[1]);
 						continue;
@@ -693,8 +687,7 @@ int sandbox(void *my_args)
 					ssize_t bytes_written = write(pipe_in[1], stdin_buffer, (size_t)stdin_bytes_read);
 					if (check_eagain(bytes_written, "write")) 
 					{
-						CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
-						            "epoll_ctl");
+						CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL));
 						continue;
 					}
 					stdin_bytes_read = 0;
@@ -723,7 +716,7 @@ int sandbox(void *my_args)
 					for (;;) 
 					{
 						stdin_bytes_read = read(STDIN_FILENO, stdin_buffer, sizeof stdin_buffer);
-						CHECK_POSIX(stdin_bytes_read, "read");
+						CHECK_POSIX(stdin_bytes_read);
 						ssize_t bytes_written = write(pipe_in[1], stdin_buffer,
 								(size_t)stdin_bytes_read);
 						if (check_eagain(bytes_written, "write")) break;
@@ -744,8 +737,7 @@ int sandbox(void *my_args)
 				if (evt->data.fd == STDIN_FILENO) 
 				{
 					close(pipe_in[1]);
-					CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL),
-							"epoll_ctl");
+					CHECK_POSIX(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, STDIN_FILENO, NULL));
 				}
 				close(evt->data.fd);
 			}

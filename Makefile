@@ -20,9 +20,9 @@ endif
 
 all: openjail trace
 
-openjail: openjail.c args.c
+openjail: openjail.c args.c helpers.c
 
-trace: array.c trace.c
+trace: array.c trace.c helpers.c
 
 install: openjail
 	install -Dm755 $< $(DESTDIR)$(PREFIX)/bin/$<
