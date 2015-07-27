@@ -1,10 +1,8 @@
-Playpen is a secure application sandbox built with modern Linux sandboxing features.
+Openjail is a secure application sandbox built with modern Linux sandboxing features, 
+built on top of `playpen`
 
 # Features
 
-* The sandboxed application is spawned inside a systemd scope unit, providing
-  integration with systemd tools like `systemd-cgtop` and robust control group
-  management.
 * The application is contained inside a read-only root directory with `chroot`.
 * A mount namespace is leveraged to provide writable /tmp, /dev/tmp and home
   directories as in-memory (tmpfs) filesystems. Since these mounts are private,
@@ -16,6 +14,9 @@ Playpen is a secure application sandbox built with modern Linux sandboxing featu
 * Device whitelisting prevents reading, writing or creating any devices by default.
 * The initial process and any forked children can be reliably killed.
 * An optional timeout can take care of automatically killing the contained processes.
+* An optional MB-s measure can be added so resources can be capped based on how much
+  memory and time they occupy.
+* rlimit can be used to add further restrictions to the sandbox.
 * A process namespace hides all external processes from the sandbox.
 * A network namespace provides a private loopback and no external interfaces.
 * The system's hostname and IPC resources are hidden from the sandbox via
@@ -37,4 +38,3 @@ Playpen is a secure application sandbox built with modern Linux sandboxing featu
 
 * Linux 3.8 or later
 * [libseccomp](https://github.com/seccomp/libseccomp) 2.1.1 or later
-* systemd

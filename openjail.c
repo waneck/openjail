@@ -417,7 +417,7 @@ int sandbox(void *my_args) {
 				 rlimit_cpu = -1;
     long max_mbs = -1,
          mbs_check_every = 250;
-    const char *hostname = "playpen";
+    const char *hostname = "openjail";
     long timeout = 0;
     long memory_limit = 128;
     struct bind_list *binds = NULL, *binds_tail = NULL;

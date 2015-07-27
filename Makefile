@@ -18,16 +18,16 @@ else
 	CFLAGS += -Wall -Wextra
 endif
 
-all: playpen trace
+all: openjail trace
 
-playpen: playpen.c
+openjail: openjail.c
 
 trace: array.c trace.c
 
-install: playpen
+install: openjail
 	install -Dm755 $< $(DESTDIR)$(PREFIX)/bin/$<
 
 uninstall:
-	rm $(DESTDIR)$(PREFIX)/bin/playpen
+	rm $(DESTDIR)$(PREFIX)/bin/openjail
 
 .PHONY: install uninstall
