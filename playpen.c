@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <grp.h>
+#include <linux/capability.h>
 #include <linux/limits.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -150,9 +151,21 @@ static void drop_capabilities() {
   CHECK_POSIX(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), "ptrcl set no new privs");
 
   for (int i = 0; i <= 63; i++) {
-    int code = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
-    if (code < 0 && errno != EINVAL)
-      err(EXIT_FAILURE, "prctl(PR_CAPBSET_DROP, %d, 0, 0, 0)",i);
+    int cur = prctl(PR_CAPBSET_READ, i, 0, 0, 0);
+    if (cur < 0)
+    {
+      if (errno == EINVAL)
+        continue;
+      else
+        err(EXIT_FAILURE,"prctl(PR_CAPBSET_READ, %d, 0, 0, 0)", i);
+    }
+
+    if (cur != 0)
+    {
+      int code = prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
+      if (code < 0 && errno != EINVAL)
+        err(EXIT_FAILURE, "prctl(PR_CAPBSET_DROP, %d, 0, 0, 0)",i);
+    }
   }
 }
 
@@ -165,7 +178,7 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
   diff_ms += (current.tv_nsec - last_time->tv_nsec) / 1.0e6; // convert nanoseconds to miliseconds
   double elapsed_secs = ( (double) diff_ms ) / 1000.0;
   if (elapsed_secs < 0) err(EXIT_FAILURE, "elapsed secs < 0 : %f", elapsed_secs);
-	if (elapsed_secs < 0.001) return old_mbs; // do not set current time if elapsed time is very small
+  if (elapsed_secs < 0.001) return old_mbs; // do not set current time if elapsed time is very small
   *last_time = current;
 
   DIR *dir = opendir("/proc");
@@ -590,9 +603,6 @@ int sandbox(void *my_args) {
     epoll_add(epoll_fd, pipe_err[0], EPOLLIN);
     epoll_add(epoll_fd, pipe_in[1], EPOLLET | EPOLLOUT);
 
-    /* unsigned long flags = SIGCHLD|CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET; */
-    /* pid_t pid = (pid_t)syscall(__NR_clone, flags, NULL); */
-    /* CHECK_POSIX(pid, "clone"); */
     pid_t pid = fork();
     CHECK_POSIX(pid, "fork");
 
@@ -719,6 +729,7 @@ int sandbox(void *my_args) {
           CHECK_POSIX(chdir("/"), "chdir");
         }
 
+        drop_capabilities();
         // create a new session
         CHECK_POSIX(setsid(), "setsid");
 
@@ -734,7 +745,6 @@ int sandbox(void *my_args) {
             errx(EXIT_FAILURE, "asprintf");
         }
 
-        drop_capabilities();
         if (learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL), "ptrace");
 
         check(seccomp_load(ctx));
