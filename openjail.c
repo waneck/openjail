@@ -14,6 +14,7 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
 #include <sys/reg.h>
@@ -500,6 +501,34 @@ int sandbox(void *my_args)
 	epoll_add(epoll_fd, pipe_err[0], EPOLLIN);
 	epoll_add(epoll_fd, pipe_in[1], EPOLLET | EPOLLOUT);
 
+	// avoid propagating mounts to or from the parent's mount namespace
+	MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
+
+	// before forking, we'll create a tmpfs which will still be
+	// visible by the openjail process - this way we'll be able
+	// to copy back the files if needed
+	if (args->mount_tmpfs)
+	{
+		char *shm = join_path(args->root, "dev/shm");
+		char *opts = NULL;
+		if (args->tmpfs_size > 0)
+		{
+			CHECK_POSIX(asprintf(&opts, "size=%ld", args->tmpfs_size));
+			printf("size %s\n",opts);
+		}
+
+		if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, opts) == -1) 
+		{
+			err(EXIT_FAILURE, "mounting /dev/shm failed - please create this directory on the chroot target");
+		}
+
+		if (NULL != opts)
+			free(opts);
+
+		free(shm);
+	}
+
+
 	pid_t pid = fork();
 	CHECK_POSIX(pid);
 
@@ -570,21 +599,11 @@ int sandbox(void *my_args)
 
 		if (args->mount_tmpfs)
 		{
-			char *shm = join_path(args->root, "dev/shm");
-			if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) 
-			{
-				if (errno != ENOENT) 
-				{
-					err(EXIT_FAILURE, "mounting /dev/shm failed");
-				}
-			}
-			free(shm);
-		}
-
-		if (args->mount_tmpfs)
-		{
+			char *dir = join_path(args->root, "dev/shm/tmp");
+			CHECK_POSIX(mkdir(dir, S_IRWXU | S_IRWXG |S_IRWXO));
 			char *tmp = join_path(args->root, "tmp");
-			if (mount(NULL, tmp, "tmpfs", MS_NOSUID|MS_NODEV, NULL) == -1) 
+
+			if (mount(dir, tmp, "bind", MS_BIND, NULL) == -1) 
 			{
 				if (errno != ENOENT) 
 				{
@@ -592,6 +611,7 @@ int sandbox(void *my_args)
 				}
 			}
 			free(tmp);
+			free(dir);
 		}
 
 		set_rlimit(RLIMIT_AS, args->rlimit_as);
@@ -621,7 +641,10 @@ int sandbox(void *my_args)
 		if (access(pw.pw_dir, F_OK) >= 0)
 		{
 			if (args->mount_tmpfs)
-				MOUNTX(NULL, pw.pw_dir, "tmpfs", MS_NOSUID|MS_NODEV, NULL);
+			{
+				CHECK_POSIX(mkdir("/dev/shm/home", S_IRWXU | S_IRWXG |S_IRWXO));
+				MOUNTX("/dev/shm/home", pw.pw_dir, "bind", MS_BIND, NULL);
+			}
 
 			// switch to the user's home directory as a login shell would
 			CHECK_POSIX(chdir(pw.pw_dir));
@@ -659,9 +682,6 @@ int sandbox(void *my_args)
 
 	if (args->max_mbs) 
 	{
-		// avoid propagating mounts to or from the parent's mount namespace
-		MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);
-
 		MOUNTX(NULL, "/proc", "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL);
 	}
 

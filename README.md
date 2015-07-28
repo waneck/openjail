@@ -31,7 +31,7 @@ built on top of `playpen`
     pacstrap -cd sandbox
 
     # use the `trace` program to create a system call whitelist
-    trace whitelist ls -l /
+    trace -o whitelist -- ls -l /
 
     # run the sandbox, enforcing the learned system call whitelist
     openjail sandbox -S whitelist -- ls -l /

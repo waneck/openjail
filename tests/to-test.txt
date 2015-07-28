@@ -1,0 +1,1 @@
+./openjail --mount-proc --mount-tmpfs --mount-dev-minimal --tmpfs-size 5M --syscalls-file /tmp/az -- ../openjail/test-chroot /bin/sh -c "dd if=/dev/zero of=/tmp/ddd bs=6M count=1; ls -al /tmp" # should fail

@@ -165,6 +165,7 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->syscalls = NULL;
 	out->syscalls_file = NULL;
 	out->learn_name = NULL;
+	out->tmpfs_size = -1;
 	/* out->copies = NULL; */
 	/* out->copies_tail = NULL; */
 
