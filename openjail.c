@@ -68,12 +68,12 @@ static void bind_list_apply(const char *root, struct bind_list *list)
 {
 	for (; list; list = list->next) 
 	{
-		char *dst = join_path(root, list->arg);
+		char *dst = join_path(root, list->dest);
 		// Only use MS_REC with writable mounts to work around a kernel bug:
 		// https://bugzilla.kernel.org/show_bug.cgi?id=24912
-		MOUNTX(list->arg, dst, "bind", MS_BIND | (list->read_only ? 0 : MS_REC), NULL);
+		MOUNTX(list->origin, dst, "bind", MS_BIND | (list->read_only ? 0 : MS_REC), NULL);
 		if (list->read_only)
-			MOUNTX(list->arg, dst, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY, NULL);
+			MOUNTX(list->origin, dst, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY, NULL);
 		free(dst);
 	}
 }

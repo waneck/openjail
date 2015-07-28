@@ -5,11 +5,19 @@
 #include <stdio.h>
 #include <string.h>
 
+// struct copy_list
+// {
+// 	struct copy_list *next;
+// 	char *origin;
+// 	char *dest;
+// };
+
 struct bind_list 
 {
 	struct bind_list *next;
 	bool read_only;
-	char arg[];
+	char *origin;
+	char *dest;
 };
 
 typedef struct 
@@ -19,6 +27,9 @@ typedef struct
 	bool mount_dev;
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
+	// long tmpfs_size;
+	// struct copy_list *copies;
+	// struct copy_list *copies_tail;
 	long rlimit_as;
 	long rlimit_fsize;
 	long rlimit_nofile;
