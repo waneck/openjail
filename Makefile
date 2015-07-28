@@ -20,7 +20,7 @@ endif
 
 all: openjail trace
 
-openjail: openjail.c args.c helpers.c supervisor.c sandbox.c
+openjail: openjail.c args.c helpers.c supervisor.c sandbox.c trace.c array.c
 
 trace: array.c trace.c trace-main.c helpers.c
 

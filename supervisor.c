@@ -58,59 +58,7 @@ static void set_non_blocking(int fd)
 	CHECK_POSIX(fcntl(fd, F_SETFL, flags | O_NONBLOCK));
 }
 
-static void do_trace(const struct signalfd_siginfo *si, bool *trace_init, FILE *learn) 
-{
-	int status;
-	if (waitpid((pid_t)si->ssi_pid, &status, WNOHANG) != (pid_t)si->ssi_pid)
-		errx(EXIT_FAILURE, "waitpid");
-
-	if (WIFEXITED(status) || WIFSIGNALED(status) || !WIFSTOPPED(status))
-		errx(EXIT_FAILURE, "unexpected ptrace event");
-
-	int inject_signal = 0;
-	if (*trace_init) {
-		int signal = WSTOPSIG(status);
-		if (signal != SIGTRAP || !(status & PTRACE_EVENT_SECCOMP))
-			inject_signal = signal;
-		else {
-			errno = 0;
-#ifdef __x86_64__
-			long syscall = ptrace(PTRACE_PEEKUSER, si->ssi_pid, sizeof(long)*ORIG_RAX);
-#else
-			long syscall = ptrace(PTRACE_PEEKUSER, si->ssi_pid, sizeof(long)*ORIG_EAX);
-#endif
-			if (errno) err(EXIT_FAILURE, "ptrace");
-			char *name = seccomp_syscall_resolve_num_arch(SCMP_ARCH_NATIVE, (int)syscall);
-			if (!name) errx(EXIT_FAILURE, "seccomp_syscall_resolve_num_arch");
-
-			rewind(learn);
-			char line[SYSCALL_NAME_MAX];
-			while (fgets(line, sizeof line, learn)) 
-			{
-				char *pos;
-				if ((pos = strchr(line, '\n'))) *pos = '\0';
-				if (!strcmp(name, line)) 
-				{
-					name = NULL;
-					break;
-				}
-			}
-
-			if (name) 
-			{
-				fprintf(learn, "%s\n", name);
-				free(name);
-			}
-		}
-	} else {
-		CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, si->ssi_pid, 0, PTRACE_O_TRACESECCOMP));
-		*trace_init = true;
-	}
-	CHECK_POSIX(ptrace(PTRACE_CONT, si->ssi_pid, 0, inject_signal));
-}
-
-static void handle_signal(int sig_fd, pid_t child_fd,
-                          bool *trace_init, FILE *learn)
+static void handle_signal(int sig_fd, pid_t child_fd)
 {
 	struct signalfd_siginfo si;
 	ssize_t bytes_r = read(sig_fd, &si, sizeof(si));
@@ -144,7 +92,6 @@ static void handle_signal(int sig_fd, pid_t child_fd,
 			errx(EXIT_FAILURE, "application terminated abnormally with signal %d (%s)",
 					si.ssi_status, strsignal(si.ssi_status));
 		case CLD_TRAPPED:
-			do_trace(&si, trace_init, learn);
 		case CLD_STOPPED:
 		default:
 			break;
@@ -236,6 +183,14 @@ static void write_ns_map(char *map_name, unsigned int id)
 int supervisor(void *my_args) 
 {
 	const oj_args *args = my_args;
+
+	// Let the main thread trace us
+	if (args->learn_name)
+	{
+		CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
+		CHECK(raise(SIGSTOP));
+	}
+
 	if (!args->is_root)
 	{
 		// first check if /proc/self/setgroups exists (see user_namespaces(7))
@@ -373,13 +328,6 @@ int supervisor(void *my_args)
 	bind_list_free(args->binds);
 	seccomp_release(ctx);
 
-	FILE *learn = NULL;
-	if (args->learn_name) 
-	{
-		learn = fopen(args->learn_name, "a+");
-		if (!learn) err(EXIT_FAILURE, "fopen");
-	}
-
 	// Inform the child that the scope unit has been created.
 	CHECK_POSIX(write(pipe_in[1], &(uint8_t) { 0 }, 1));
 	set_non_blocking(pipe_in[1]);
@@ -410,7 +358,6 @@ int supervisor(void *my_args)
 
 	uint8_t stdin_buffer[PIPE_BUF];
 	ssize_t stdin_bytes_read = 0;
-	bool trace_init = false;
 	double current_mbs = 0;
 	struct timespec last_time;
 	CHECK_POSIX(clock_gettime(CLOCK_MONOTONIC, &last_time));
@@ -454,7 +401,7 @@ int supervisor(void *my_args)
 					kill(pid, SIGKILL);
 					return EXIT_TIMEOUT;
 				} else if (evt->data.fd == sig_fd) {
-					handle_signal(sig_fd, pid, &trace_init, learn);
+					handle_signal(sig_fd, pid);
 				} else if (evt->data.fd == pipe_out[0]) {
 					copy_to_stdstream(pipe_out[0], STDOUT_FILENO);
 				} else if (evt->data.fd == pipe_err[0]) {

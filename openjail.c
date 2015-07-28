@@ -1,5 +1,6 @@
 #include "openjail.h"
 #include "helpers.h"
+#include "trace.h"
 
 #include <dirent.h>
 #include <sched.h>
@@ -28,7 +29,6 @@ static void prevent_leaked_file_descriptors()
 
 int main(int argc, char **argv) 
 {
-	int status, exitstatus, flags;
 	prevent_leaked_file_descriptors();
 
 	oj_args cmd_args = { .is_root = geteuid() == 0, .orig_uid = getuid(), .orig_gid = getgid() };
@@ -42,15 +42,23 @@ int main(int argc, char **argv)
 
 	char supervisor_stack[STACK_SIZE]; //reuse our own stack for the child
 
-	flags = CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
+	int flags = CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
 	if (!cmd_args.is_root)
 		flags |= CLONE_NEWUSER;
 	pid_t pid = clone(supervisor, supervisor_stack + STACK_SIZE, flags, &cmd_args);
 	CHECK_POSIX_ARGS(pid, "clone (%d)", pid);
 
-	status = 0;
-	waitpid(pid, &status, 0);
-	exitstatus = WEXITSTATUS(status);
-	return exitstatus;
+	if (cmd_args.learn_name)
+		return trace_process(pid, cmd_args.learn_name);
+
+	while (true)
+	{
+		int status = 0;
+		waitpid(pid, &status, 0);
+		if (WIFEXITED(status))
+		{
+			return WEXITSTATUS(status);
+		}
+	}
 }
 

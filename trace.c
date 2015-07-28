@@ -105,11 +105,11 @@ static int wait_for_seccomp_or_attach(pid_t child, int *child_count, pid_t *cur_
 	}
 }
 
-int trace_process(pid_t child, char *output)
+int trace_process(pid_t child, const char *output)
 {
 	dynarr *found_syscalls = dynarr_alloc(1);
 	int status;
-	CHECK_POSIX(waitpid(child, &status, 0));
+	CHECK_POSIX(waitpid(child, &status, __WALL));
 	assert(WIFSTOPPED(status));
 	CHECK_POSIX(ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_FLAGS));
 	CHECK_POSIX(ptrace(PTRACE_CONT, child, 0, 0));

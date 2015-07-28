@@ -234,8 +234,6 @@ int sandbox(const oj_args *args, scmp_filter_ctx ctx)
 	if (pw.pw_dir) free(pw.pw_dir);
 	if (pw.pw_shell) free(pw.pw_shell);
 
-	if (args->learn_name) CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
-
 	CHECK(seccomp_load(ctx));
 	CHECK_POSIX(execvpe(args->cmd[0], args->cmd, env));
 	errx(1, "Control reached after excve");
