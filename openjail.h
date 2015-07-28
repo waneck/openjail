@@ -27,7 +27,7 @@ typedef struct
 	bool mount_dev;
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
-	// long tmpfs_size;
+	long tmpfs_size;
 	// struct copy_list *copies;
 	// struct copy_list *copies_tail;
 	long rlimit_as;

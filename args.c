@@ -77,6 +77,40 @@ static long strtolx_positive(const char *s, const char *what)
 	return result;
 }
 
+static long sizetol(const char *s, const char *what)
+{
+	char *end;
+	errno = 0;
+	long result = strtol(s, &end, 10);
+	if (errno) errx(EXIT_FAILURE, "%s is too large", what);
+	if (result < 0)
+		errx(EXIT_FAILURE, "%s must be a positive integer", what);
+
+	switch(*end)
+	{
+		case 'G':
+		case 'g':
+			result *= 1024;
+		case 'M':
+		case 'm':
+			result *= 1024;
+		case 'K':
+		case 'k':
+			result *= 1024;
+			if (result < 0)
+				errx(EXIT_FAILURE, "%s is too large", what);
+			if (end[1] != '\0')
+				errx(EXIT_FAILURE, "%s might only end with K (KB), M (MB), and G (GB)", what);
+			break;
+		case '\0':
+			break;
+		default:
+			errx(EXIT_FAILURE, "%s might only end with K (KB), M (MB), and G (GB)", what);
+	}
+
+	return result;
+}
+
 _Noreturn static void usage(FILE *out) 
 {
 	fprintf(out, "usage: %s [options] [root] [command ...]\n", program_invocation_short_name);
@@ -87,12 +121,12 @@ _Noreturn static void usage(FILE *out)
 			" -d, --mount-dev-minimal          mount minimal /dev\n"
 			" -D, --mount-dev                  mount /dev as devtmpfs in the container\n"
 			" -T, --mount-tmpfs                mount tmpfs containers\n"
-			/* " -M, --tmpfs-size                 sets the maximum combined tmpfs size (defaults to 16M)\n" */
+			" -M, --tmpfs-size                 sets the maximum combined tmpfs size\n"
 			/* " -c, --copy=PATH                  after successful run of the program, will copy from tmpfs <PATH> to the current directory\n" */
 			/* " -C, --copy-from=FROM,to=TO       same as --copy: optional interface for setting different paths for TO/FROM\n" */
-			" -m, --rlimit-as=VALUE            sets the rlimit max virtual memory of the process, in bytes\n"
+			" -m, --rlimit-as=VALUE            sets the rlimit max virtual memory of the process\n"
 			"     --rlimit-cpu=VALUE           sets the rlimit max CPU time, in seconds\n"
-			"     --rlimit-fsize=VALUE         sets the rlimit max file size of a single file, in bytes\n"
+			"     --rlimit-fsize=VALUE         sets the rlimit max file size of a single file\n"
 			"     --rlimit-nofile=VALUE        sets the rlimit max number of open files\n"
 			"     --rlimit-nproc=VALUE         sets the rlimit max number of open processes\n"
 			"     --rlimit-nice=VALUE          sets the rlimit min number of nice (set as 20 + nice_value. seee rlimit manpage)\n"
@@ -141,9 +175,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 		{ "mount-dev",         no_argument,       0, 'D' },
 		{ "mount-tmpfs",       no_argument,       0, 'T' },
 		{ "mount-dev-minimal", no_argument,       0, 'd' },
-		/* { "tmpfs-size",        required_argument, 0, 'M' }, */
-		/* { "copy",              required_argument, 0, 'c' }, */
-		/* { "copy-from",         required_argument, 0, 'C' }, */
+		{ "tmpfs-size",        required_argument, 0, 'M' },
+		{ "copy",              required_argument, 0, 'c' },
+		{ "copy-from",         required_argument, 0, 'C' },
 		{ "rlimit-as",         required_argument, 0, 'm' },
 		{ "rlimit-fsize",      required_argument, 0, 0x201 },
 		{ "rlimit-nofile",     required_argument, 0, 0x202 },
@@ -188,10 +222,10 @@ void parse_args(int argc, char **argv, oj_args *out)
 				out->mount_minimal_dev = true;
 				break;
 			case 'm':
-				out->rlimit_as = strtolx_positive(optarg, "rlimit-as");
+				out->rlimit_as = sizetol(optarg, "rlimit-as");
 				break;
 			case 0x201:
-				out->rlimit_fsize = strtolx_positive(optarg, "rlimit-fsize");
+				out->rlimit_fsize = sizetol(optarg, "rlimit-fsize");
 				break;
 			case 0x202:
 				out->rlimit_nofile = strtolx_positive(optarg, "rlimit-nofile");
@@ -210,6 +244,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			case 'e':
 				out->mbs_check_every = strtolx_positive(optarg, "mbs-check-every");
+				break;
+			case 'M':
+				out->tmpfs_size = sizetol(optarg, "tmpfs-size");
 				break;
 			/* case 'C': */
 			/* case 'c': */
