@@ -46,9 +46,8 @@ _Noreturn static void usage(FILE *out)
 			" -e, --mbs-check-every       sets the internal, in ms, to check the memory usage for the MB-s accumulator\n"
 			" -b, --bind                  bind mount a read-only directory in the container\n"
 			" -B, --bind-rw               bind mount a directory in the container\n"
-			" -n, --hostname=NAME         the hostname to set the container to\n"
+			" -n, --hostname=NAME         the hostname/domain name to set the container to\n"
 			" -t, --timeout=INTEGER       how long the container is allowed to run\n"
-			" -m, --memory-limit=LIMIT    the memory limit of the container\n"
 			" -s, --syscalls=LIST         comma-separated whitelist of syscalls\n"
 			" -S, --syscalls-file=PATH    whitelist file containing one syscall name per line\n"
 			" -l, --learn=PATH            allow unwhitelisted syscalls and append them to a file\n",
@@ -73,7 +72,6 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->mbs_check_every = 250;
 	out->hostname = "openjail";
 	out->timeout = 0;
-	out->memory_limit = 128;
 	out->binds = NULL;
 	out->binds_tail = NULL;
 	out->syscalls = NULL;
@@ -170,9 +168,6 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			case 't':
 				out->timeout = strtolx_positive(optarg, "timeout");
-				break;
-			case 'm':
-				out->memory_limit = strtolx_positive(optarg, "memory limit");
 				break;
 			case 's':
 				out->syscalls = optarg;

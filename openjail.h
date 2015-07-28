@@ -29,7 +29,6 @@ typedef struct
 	long mbs_check_every;
 	const char *hostname;
 	long timeout;
-	long memory_limit;
 	struct bind_list *binds;
 	struct bind_list *binds_tail;
 	char *syscalls;

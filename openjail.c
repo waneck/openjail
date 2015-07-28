@@ -528,6 +528,7 @@ int sandbox(void *my_args)
 		CHECK_POSIX(read(STDIN_FILENO, &ready, sizeof ready));
 
 		CHECK_POSIX(sethostname(args->hostname, strlen(args->hostname)));
+		CHECK_POSIX(setdomainname(args->hostname, strlen(args->hostname)));
 
 		// avoid propagating mounts to or from the parent's mount namespace
 		MOUNTX(NULL, "/", NULL, MS_PRIVATE|MS_REC, NULL);

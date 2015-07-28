@@ -21,17 +21,19 @@ built on top of `playpen`
 * A network namespace provides a private loopback and no external interfaces.
 * The system's hostname and IPC resources are hidden from the sandbox via
   namespaces.
+* No need of root permissions to run (if kernel supports `CLONE_NEWUSER`)
 
 # Example
 
     # create a chroot
     mkdir sandbox
+    # on debian/ubuntu, use debootstrap instead
     pacstrap -cd sandbox
 
-    # run `ls -l` in the sandbox and create a system call whitelist
-    openjail sandbox -l whitelist -- ls -l /
+    # use the `trace` program to create a system call whitelist
+    trace whitelist ls -l /
 
-    # run it again, enforcing the learned system call whitelist
+    # run the sandbox, enforcing the learned system call whitelist
     openjail sandbox -S whitelist -- ls -l /
 
 # Dependencies
