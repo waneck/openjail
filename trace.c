@@ -1,5 +1,6 @@
 #include "helpers.h"
 #include "array.h"
+#include "trace.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -104,7 +105,7 @@ static int wait_for_seccomp_or_attach(pid_t child, int *child_count, pid_t *cur_
 	}
 }
 
-static int trace_process(pid_t child, char *output)
+int trace_process(pid_t child, char *output)
 {
 	dynarr *found_syscalls = dynarr_alloc(1);
 	int status;
@@ -168,7 +169,7 @@ static int trace_process(pid_t child, char *output)
 	return exit_code;
 }
 
-static int child_process(int argc, char **argv)
+int child_process(int argc, char **argv)
 {
 	char **args = calloc((unsigned long) argc+1, sizeof(char *));
 	for (int i = 0; i < argc; i++)
@@ -187,35 +188,4 @@ static int child_process(int argc, char **argv)
 
 	CHECK_POSIX(execvp(args[0], args));
 	return 1;
-}
-
-int main(int argc, char **argv)
-{
-	if (argc < 2)
-		ERRX("usage: %s [-o <output>] [--] <command> [command-arguments]\n\tif <output> already exists, the singal contents will be appended", argv[0]);
-	char *output = NULL;
-	int cur_arg = 1;
-	while (cur_arg < argc && argv[cur_arg][0] == '-')
-	{
-		if (strcmp(argv[cur_arg], "-o") == 0)
-		{
-			output = argv[cur_arg + 1];
-			cur_arg += 2;
-		} else if (strcmp(argv[cur_arg], "--") == 0) {
-			cur_arg++;
-			break;
-		} else {
-			ERRX("unrecognized option: %s",argv[cur_arg]);
-		}
-	}
-
-	pid_t child = fork();
-	CHECK_POSIX(child);
-
-	if (child == 0)
-	{
-		return child_process(argc-cur_arg, argv+cur_arg);
-	} else {
-		return trace_process(child, output);
-	}
 }

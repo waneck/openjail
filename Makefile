@@ -22,7 +22,7 @@ all: openjail trace
 
 openjail: openjail.c args.c helpers.c supervisor.c sandbox.c
 
-trace: array.c trace.c helpers.c
+trace: array.c trace.c trace-main.c helpers.c
 
 install: openjail
 	install -Dm755 $< $(DESTDIR)$(PREFIX)/bin/$<
