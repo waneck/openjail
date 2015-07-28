@@ -236,6 +236,6 @@ int sandbox(const oj_args *args, scmp_filter_ctx ctx)
 
 	CHECK(seccomp_load(ctx));
 	CHECK_POSIX(execvpe(args->cmd[0], args->cmd, env));
-	errx(1, "Control reached after excve");
+	errx(EXIT_FAILURE, "Control reached after excve");
 }
 

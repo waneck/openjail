@@ -18,7 +18,7 @@ static char *split_fromto(char *what, char *input)
 {
 	char *to = split_comma(what, input);
 	if (NULL == to || memcmp("to=", to, 3) != 0)
-		errx(1, "For '%s', the argument '%s' must include a ',to=' field", what, input);
+		errx(EXIT_FAILURE, "For '%s', the argument '%s' must include a ',to=' field", what, input);
 	return to + 3;
 }
 
@@ -39,7 +39,7 @@ static struct bind_list *bind_list_alloc(char *arg, bool extended)
 			if (strcmp(rw, "rw"))
 				next->read_only = false;
 			else
-				errx(1, "For '--bind-from', invalid suboption %s", rw);
+				errx(EXIT_FAILURE, "For '--bind-from', invalid suboption %s", rw);
 		}
 	} else {
 		next->dest = arg;
@@ -59,7 +59,7 @@ static struct bind_list *bind_list_alloc(char *arg, bool extended)
 /* 		next->dest = split_fromto("--copy-from", arg); */
 /* 		char *split = split_comma("--copy-from", next->dest); */
 /* 		if (NULL != split) */
-/* 			errx(1, "For '--copy-from', invalid suboption '%s'", split); */
+/* 			errx(EXIT_FAILURE, "For '--copy-from', invalid suboption '%s'", split); */
 /* 	} else { */
 /* 		next->dest = NULL; */
 /* 	} */

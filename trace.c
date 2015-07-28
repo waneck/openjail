@@ -29,10 +29,10 @@ static void get_syscall(pid_t child, long *normalized_id, char **name)
 #else
 	long syscall = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*ORIG_EAX);
 #endif
-	if (errno) err(1,"get syscall");
+	if (errno) err(EXIT_FAILURE,"get syscall");
 
 	char *n = seccomp_syscall_resolve_num_arch(SCMP_ARCH_NATIVE, (int)syscall);
-	if (!n) errx(1, "seccomp_syscall_resolve_num_arch");
+	if (!n) errx(EXIT_FAILURE, "seccomp_syscall_resolve_num_arch");
 	*name = n;
 
 	// get normalized id
@@ -182,10 +182,10 @@ int child_process(int argc, char **argv)
 
 	prctl (PR_SET_NO_NEW_PRIVS, 1);
 	scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_TRACE(0)); //let's trace them all
-	if (NULL == ctx) errx(1, "Couldn't create seccomp filter");
+	if (NULL == ctx) errx(EXIT_FAILURE, "Couldn't create seccomp filter");
 	seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(execve), 0);
 	CHECK(seccomp_load(ctx));
 
 	CHECK_POSIX(execvp(args[0], args));
-	return 1;
+	return EXIT_FAILURE;
 }

@@ -428,7 +428,8 @@ int supervisor(void *my_args)
 			}
 
 			// the child process is ready for more input
-			if (evt->events & EPOLLOUT && evt->data.fd == pipe_in[1]) {
+			if (evt->events & EPOLLOUT && evt->data.fd == pipe_in[1]) 
+			{
 				// deal with previously buffered data
 				if (stdin_bytes_read > 0) 
 				{

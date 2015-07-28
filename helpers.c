@@ -7,7 +7,7 @@
 
 void check(char *file, int line, int rc) 
 {
-	if (rc < 0) errx(1, "%s:%d: %s", file, line, strerror(-rc));
+	if (rc < 0) errx(EXIT_FAILURE, "%s:%d: %s", file, line, strerror(-rc));
 }
 
 __attribute__((format(printf, 4, 5))) void my_check_posix(char *file, int line, intmax_t rc, const char *fmt, ...) 
