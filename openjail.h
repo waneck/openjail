@@ -5,6 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <seccomp.h>
+
+#define EXIT_TIMEOUT 3
+#define EXIT_MB_S 4
+
 // struct copy_list
 // {
 // 	struct copy_list *next;
@@ -57,5 +62,14 @@ typedef struct
 // implemented on args.c
 
 void parse_args(int argc, char **argv, oj_args *out_struct);
+
+
+// implemented on sandbox.c
+
+int sandbox(const oj_args *args, scmp_filter_ctx ctx);
+
+// implemented on supervisor.c
+
+int supervisor(void *args);
 
 #endif
