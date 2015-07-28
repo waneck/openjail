@@ -514,7 +514,6 @@ int sandbox(void *my_args)
 		if (args->tmpfs_size > 0)
 		{
 			CHECK_POSIX(asprintf(&opts, "size=%ld", args->tmpfs_size));
-			printf("size %s\n",opts);
 		}
 
 		if (mount(NULL, shm, "tmpfs", MS_NOSUID|MS_NODEV, opts) == -1) 
