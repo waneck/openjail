@@ -157,9 +157,11 @@ int trace_process(pid_t child, const char *output)
 		get_syscall(cur_child, &syscall, &syscall_name);
 		if (!dynarr_exists(found_syscalls, (intptr_t) syscall))
 		{
-			printf("%s\n", syscall_name);
 			dynarr_push(found_syscalls, (intptr_t) syscall);
-			if (file != NULL) fprintf(file, "%s\n", syscall_name);
+			if (file != NULL) 
+				fprintf(file, "%s\n", syscall_name);
+			else
+				printf("%s\n", syscall_name);
 		}
 		free(syscall_name);
 
