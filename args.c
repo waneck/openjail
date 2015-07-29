@@ -47,24 +47,38 @@ static struct bind_list *bind_list_alloc(char *arg, bool extended)
 	return next;
 }
 
-/* static struct copy_list *copy_list_alloc(char *arg, bool extended)  */
-/* { */
-/* 	struct copy_list *next = malloc(sizeof(struct copy_list)); */
-/* 	if (!next) err(EXIT_FAILURE, "malloc"); */
-/*  */
-/* 	next->next = NULL; */
-/* 	next->origin = arg; */
-/* 	if (extended) */
-/* 	{ */
-/* 		next->dest = split_fromto("--copy-from", arg); */
-/* 		char *split = split_comma("--copy-from", next->dest); */
-/* 		if (NULL != split) */
-/* 			errx(EXIT_FAILURE, "For '--copy-from', invalid suboption '%s'", split); */
-/* 	} else { */
-/* 		next->dest = NULL; */
-/* 	} */
-/* 	return next; */
-/* } */
+static struct copy_list *copy_list_alloc(char *arg, bool extended) 
+{
+	struct copy_list *next = malloc(sizeof(struct copy_list));
+	if (!next) err(EXIT_FAILURE, "malloc");
+
+	next->next = NULL;
+	next->origin = arg;
+	if (extended)
+	{
+		next->dest = split_fromto("--copy-from", arg);
+		char *split = split_comma("--copy-from", next->dest);
+		if (NULL != split)
+			errx(EXIT_FAILURE, "For '--copy-from', invalid suboption '%s'", split);
+	} else {
+		char *dest = strcpy(malloc(strlen(arg)), arg);
+		for (int i = 0; ; i++)
+		{
+			char cur = dest[i];
+			if (cur == '\0') break;
+
+			switch(cur)
+			{
+				case '/':
+				case '.':
+					dest[i] = '_';
+					break;
+			}
+		}
+		next->dest = dest;
+	}
+	return next;
+}
 
 static long strtolx_positive(const char *s, const char *what) 
 {
@@ -122,8 +136,8 @@ _Noreturn static void usage(FILE *out)
 			" -D, --mount-dev                  mount /dev as devtmpfs in the container\n"
 			" -T, --mount-tmpfs                mount tmpfs containers\n"
 			" -M, --tmpfs-size                 sets the maximum combined tmpfs size\n"
-			/* " -c, --copy=PATH                  after successful run of the program, will copy from tmpfs <PATH> to the current directory\n" */
-			/* " -C, --copy-from=FROM,to=TO       same as --copy: optional interface for setting different paths for TO/FROM\n" */
+			" -c, --copy=PATH                  after successful run of the program, will copy from tmpfs <PATH> to the current directory\n"
+			" -C, --copy-from=FROM,to=TO       same as --copy: optional interface for setting different paths for TO/FROM\n"
 			" -m, --rlimit-as=VALUE            sets the rlimit max virtual memory of the process\n"
 			"     --rlimit-cpu=VALUE           sets the rlimit max CPU time, in seconds\n"
 			"     --rlimit-fsize=VALUE         sets the rlimit max file size of a single file\n"
@@ -166,8 +180,8 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->syscalls_file = NULL;
 	out->learn_name = NULL;
 	out->tmpfs_size = -1;
-	/* out->copies = NULL; */
-	/* out->copies_tail = NULL; */
+	out->copies = NULL;
+	out->copies_tail = NULL;
 
 	static const struct option opts[] = {
 		{ "help",              no_argument,       0, 'h' },
@@ -249,16 +263,16 @@ void parse_args(int argc, char **argv, oj_args *out)
 			case 'M':
 				out->tmpfs_size = sizetol(optarg, "tmpfs-size");
 				break;
-			/* case 'C': */
-			/* case 'c': */
-			/* 	if (out->copies)  */
-			/* 	{ */
-			/* 		out->copies_tail->next = copy_list_alloc(optarg, opt == 'C'); */
-			/* 		out->copies_tail = out->copies_tail->next; */
-			/* 	} else { */
-			/* 		out->copies = out->copies_tail = copy_list_alloc(optarg, opt == 'C'); */
-			/* 	} */
-			/* 	break; */
+			case 'C':
+			case 'c':
+				if (out->copies) 
+				{
+					out->copies_tail->next = copy_list_alloc(optarg, opt == 'C');
+					out->copies_tail = out->copies_tail->next;
+				} else {
+					out->copies = out->copies_tail = copy_list_alloc(optarg, opt == 'C');
+				}
+				break;
 			case 'b':
 			case 'B':
 				if (out->binds) 
@@ -297,4 +311,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->root = argv[optind];
 	optind++;
 	out->cmd = argv + optind;
+
+	if (out->copies && !out->mount_tmpfs)
+	{
+		err(EXIT_FAILURE, "You must define --mount-tmpfs if --copy is being used");
+	}
 }

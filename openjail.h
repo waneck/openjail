@@ -10,12 +10,12 @@
 #define EXIT_TIMEOUT 3
 #define EXIT_MB_S 4
 
-// struct copy_list
-// {
-// 	struct copy_list *next;
-// 	char *origin;
-// 	char *dest;
-// };
+struct copy_list
+{
+	struct copy_list *next;
+	char *origin;
+	char *dest;
+};
 
 struct bind_list 
 {
@@ -33,8 +33,8 @@ typedef struct
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
 	long tmpfs_size;
-	// struct copy_list *copies;
-	// struct copy_list *copies_tail;
+	struct copy_list *copies;
+	struct copy_list *copies_tail;
 	long rlimit_as;
 	long rlimit_fsize;
 	long rlimit_nofile;
@@ -60,16 +60,12 @@ typedef struct
 } oj_args;
 
 // implemented on args.c
-
 void parse_args(int argc, char **argv, oj_args *out_struct);
 
-
 // implemented on sandbox.c
-
 int sandbox(const oj_args *args, scmp_filter_ctx ctx);
 
 // implemented on supervisor.c
-
 int supervisor(void *args);
 
 #endif

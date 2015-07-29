@@ -12,6 +12,7 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/reg.h>
+#include <sys/stat.h>
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
@@ -26,6 +27,92 @@ static void bind_list_free(struct bind_list *list)
 		free(list);
 		list = next;
 	}
+}
+
+static int copy_list_apply(struct copy_list *list, const char *root)
+{
+	if (!list) return 0;
+
+	char *tmpfs_path = join_path(root, "dev/shm");
+	struct stat tmpfs_stat;
+	CHECK_POSIX(stat(tmpfs_path, &tmpfs_stat));
+
+	int retval = 0; // 0 == success
+	for (; list; list = list->next) 
+	{
+		char *path = join_path(root, list->origin);
+		// check if file exists
+		if (access(path, R_OK) != 0)
+		{
+			warn("--copy: file '%s' doesn't exist", path);
+			goto error;
+		}
+
+		struct stat cstat;
+		if (stat(path, &cstat) != 0)
+		{
+			warn("--copy: accessing '%s' failed", path);
+			goto error;
+		}
+
+		// check if file is inside tmpfs
+		if (cstat.st_dev != tmpfs_stat.st_dev)
+		{
+			warnx("--copy: cannot copy file '%s': it is outside of temporary mounts", list->origin);
+			goto error;
+		}
+
+		// try to write to path only if it doesn't exist
+		int wfd = open(list->dest, O_CREAT | O_EXCL | O_WRONLY, 0644);
+		if (wfd < 0)
+		{
+			warn("--copy: write to file '%s' failed", list->dest);
+			goto error;
+		}
+		int rfd = open(path, O_RDONLY);
+		if (rfd < 0)
+		{
+			warn("--copy: read file '%s' failed", list->origin);
+			close(wfd);
+			goto error;
+		}
+
+		// actually copy the file
+		char buf[8192];
+		while(true)
+		{
+			ssize_t result = read(rfd, &buf[0], sizeof(buf));
+			if (!result) break;
+			if (result < 0) goto local_error;
+			if (write(wfd, &buf[0], (size_t) result) != result) goto local_error;
+			continue;
+
+local_error:
+			warn("--copy: error while copying '%s' to '%s'", list->origin, list->dest);
+			close(rfd);
+			close(wfd);
+			goto error;
+		}
+
+		close(rfd);
+		close(wfd);
+		free(path);
+		continue;
+
+error:
+		free(path);
+		retval = 1;
+		continue;
+	}
+
+	return retval;
+}
+
+static int before_exit(const oj_args *args)
+{
+	if (args->copies)
+		return copy_list_apply(args->copies, args->root);
+	return 0;
 }
 
 static void epoll_add(int epoll_fd, int fd, uint32_t events) 
@@ -59,7 +146,7 @@ static void set_non_blocking(int fd)
 	CHECK_POSIX(fcntl(fd, F_SETFL, flags | O_NONBLOCK));
 }
 
-static void handle_signal(int sig_fd, pid_t child_fd)
+static void handle_signal(int sig_fd, pid_t child_fd, const oj_args *args)
 {
 	struct signalfd_siginfo si;
 	ssize_t bytes_r = read(sig_fd, &si, sizeof(si));
@@ -87,7 +174,11 @@ static void handle_signal(int sig_fd, pid_t child_fd)
 			{
 				warnx("application terminated with error code %d", si.ssi_status);
 			}
-			exit(si.ssi_status);
+
+			int ret = before_exit(args);
+			if (si.ssi_status)
+				ret = si.ssi_status;
+			exit(ret);
 		case CLD_KILLED:
 		case CLD_DUMPED:
 			errx(EXIT_FAILURE, "application terminated abnormally with signal %d (%s)",
@@ -202,7 +293,7 @@ int supervisor(void *my_args)
 		// first check if /proc/self/setgroups exists (see user_namespaces(7))
 		// (this is relevant for newer kernels, which only allow setting gid mapping
 		// if setgroups is set to deny)
-		if (access("/proc/self/setgroups", F_OK) >= 0)
+		if (access("/proc/self/setgroups", F_OK) == 0)
 		{
 			FILE *f = fopen("/proc/self/setgroups", "w");
 			if (!f) err(EXIT_FAILURE, "Cannot open /proc/self/setgroups for writing");
@@ -407,7 +498,7 @@ int supervisor(void *my_args)
 					kill(pid, SIGKILL);
 					return EXIT_TIMEOUT;
 				} else if (evt->data.fd == sig_fd) {
-					handle_signal(sig_fd, pid);
+					handle_signal(sig_fd, pid, args);
 				} else if (evt->data.fd == pipe_out[0]) {
 					copy_to_stdstream(pipe_out[0], STDOUT_FILENO);
 				} else if (evt->data.fd == pipe_err[0]) {
