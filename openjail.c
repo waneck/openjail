@@ -2,6 +2,7 @@
 #include "helpers.h"
 #include "trace.h"
 
+#include <assert.h>
 #include <dirent.h>
 #include <sched.h>
 #include <sys/mount.h>
@@ -54,10 +55,16 @@ int main(int argc, char **argv)
 	while (true)
 	{
 		int status = 0;
-		waitpid(pid, &status, 0);
+		pid_t child;
+		CHECK_POSIX( (child = waitpid(pid, &status, __WALL)) );
+		assert(child == pid);
+
 		if (WIFEXITED(status))
 		{
 			return WEXITSTATUS(status);
+		} else if (WIFSIGNALED(status)) {
+			fprintf(stderr, "killed by signal %d\n", WTERMSIG(status));
+			return 1;
 		}
 	}
 }

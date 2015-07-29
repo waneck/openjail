@@ -9,6 +9,7 @@
 
 #include <sys/epoll.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/reg.h>
 #include <sys/signalfd.h>
@@ -183,6 +184,11 @@ static void write_ns_map(char *map_name, unsigned int id)
 int supervisor(void *my_args) 
 {
 	const oj_args *args = my_args;
+
+	// Kill this process if the parent dies. This is not a replacement for killing the sandboxed
+	// processes via a control group as it is not inherited by child processes, but is more
+	// robust when the sandboxed process is not allowed to fork.
+	CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL));
 
 	// Let the main thread trace us
 	if (args->learn_name)
