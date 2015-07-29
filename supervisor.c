@@ -287,7 +287,7 @@ int supervisor(void *my_args)
 	CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL));
 
 	// Let the main thread trace us
-	if (args->learn_name)
+	if (args->learn_name || args->syscall_reporting)
 	{
 		CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
 		CHECK(raise(SIGSTOP));
@@ -314,7 +314,7 @@ int supervisor(void *my_args)
 		write_ns_map("gid", mapped_id, args->orig_gid);
 	}
 
-	scmp_filter_ctx ctx = seccomp_init(args->learn_name ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
+	scmp_filter_ctx ctx = seccomp_init(args->learn_name || args->syscall_reporting ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
 	if (!ctx) errx(EXIT_FAILURE, "seccomp_init");
 
 	if (args->syscalls_file) 

@@ -51,8 +51,11 @@ int main(int argc, char **argv)
 	pid_t pid = clone(supervisor, supervisor_stack + STACK_SIZE, flags, &cmd_args);
 	CHECK_POSIX_ARGS(pid, "clone (%d)", pid);
 
-	if (cmd_args.learn_name)
-		return trace_process(pid, cmd_args.learn_name);
+	if (cmd_args.learn_name || cmd_args.syscall_reporting)
+	{
+		trace_opts opts = { .learn = cmd_args.learn_name, .child = pid, .deny_report = cmd_args.syscall_reporting };
+		return trace_process(&opts);
+	}
 
 	while (true)
 	{

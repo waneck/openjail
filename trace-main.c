@@ -28,6 +28,7 @@ int main(int argc, char **argv)
 	{
 		return child_process(argc-cur_arg, argv+cur_arg);
 	} else {
-		return trace_process(child, output);
+		trace_opts opts = { .learn = output, .child = child, .deny_report = false };
+		return trace_process(&opts);
 	}
 }

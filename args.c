@@ -136,6 +136,7 @@ _Noreturn static void usage(FILE *out)
 			" -d, --mount-dev-minimal          mount minimal /dev\n"
 			" -D, --mount-dev                  mount /dev as devtmpfs in the container\n"
 			" -T, --mount-tmpfs                mount tmpfs containers\n"
+			" -R, --syscall-reporting          better error reporting when a forbidden syscall was made\n"
 			"     --fakeroot                   set current user id as root on a new user namespace\n"
 			"     --allow-net                  allow network use\n"
 			"     --chroot-rw                  allow chroot to be writable\n"
@@ -168,6 +169,7 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->mount_dev = false;
 	out->mount_tmpfs = false;
 	out->mount_minimal_dev = false;
+	out->syscall_reporting = false;
 	out->fakeroot = false;
 	out->allow_net = false;
 	out->chroot_rw = false;
@@ -197,6 +199,7 @@ void parse_args(int argc, char **argv, oj_args *out)
 		{ "mount-dev",         no_argument,       0, 'D' },
 		{ "mount-tmpfs",       no_argument,       0, 'T' },
 		{ "mount-dev-minimal", no_argument,       0, 'd' },
+		{ "syscall-reporting", no_argument,       0, 'R' },
 		{ "fakeroot",          no_argument,       0, 0x100 },
 		{ "allow-net",         no_argument,       0, 0x101 },
 		{ "chroot-rw",         no_argument,       0, 0x102 },
@@ -245,6 +248,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			case 'd':
 				out->mount_minimal_dev = true;
+				break;
+			case 'R':
+				out->syscall_reporting = true;
 				break;
 			case 0x100:
 				if (!geteuid())
@@ -322,6 +328,11 @@ void parse_args(int argc, char **argv, oj_args *out)
 			default:
 				usage(stderr);
 		}
+	}
+
+	if (out->syscall_reporting && out->learn_name)
+	{
+		errx(EXIT_FAILURE, "You cannot use --syscall-reporting with --learn");
 	}
 
 	if (argc - optind < 2) 

@@ -39,6 +39,18 @@ static void get_syscall(pid_t child, long *normalized_id, char **name)
 	*normalized_id = syscall;
 }
 
+static void deny_call(pid_t child)
+{
+	/* struct user_regs_struct regs; */
+	/* memset(&regs, 0, sizeof(regs)); */
+	/* CHECK_POSIX(ptrace(PTRACE_GETREGS, child, 0, &regs)); */
+#ifdef __x86_64__
+	CHECK_POSIX(ptrace(PTRACE_POKEUSER, child, sizeof(long)*ORIG_RAX, -1));
+#else
+	CHECK_POSIX(ptrace(PTRACE_POKEUSER, child, sizeof(long)*ORIG_EAX, -1));
+#endif
+}
+
 static long get_syscall_num(char *name)
 {
 	long result = seccomp_syscall_resolve_name(name);
@@ -105,8 +117,12 @@ static int wait_for_seccomp_or_attach(pid_t child, int *child_count, pid_t *cur_
 	}
 }
 
-int trace_process(pid_t child, const char *output)
+int trace_process(trace_opts *opts)
 {
+	pid_t child = opts->child;
+	const char *output = opts->learn;
+	bool deny_report = opts->deny_report;
+
 	dynarr *found_syscalls = dynarr_alloc(1);
 	int status;
 	CHECK_POSIX(waitpid(child, &status, __WALL));
@@ -155,8 +171,11 @@ int trace_process(pid_t child, const char *output)
 		long syscall;
 		char *syscall_name;
 		get_syscall(cur_child, &syscall, &syscall_name);
-		if (!dynarr_exists(found_syscalls, (intptr_t) syscall))
+		if (deny_report)
 		{
+			fprintf(stderr, "syscall '%s' not allowed\n", syscall_name);
+			deny_call(cur_child);
+		} else if (!dynarr_exists(found_syscalls, (intptr_t) syscall)) {
 			dynarr_push(found_syscalls, (intptr_t) syscall);
 			if (file != NULL) 
 				fprintf(file, "%s\n", syscall_name);

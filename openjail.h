@@ -32,6 +32,7 @@ typedef struct
 	bool mount_dev;
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
+	bool syscall_reporting;
 	bool fakeroot;
 	bool allow_net;
 	bool chroot_rw;
