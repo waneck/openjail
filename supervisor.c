@@ -32,6 +32,11 @@ static void bind_list_free(struct bind_list *list)
 static int copy_list_apply(struct copy_list *list, const char *root)
 {
 	if (!list) return 0;
+	// make sure we're running with the user uid / gid
+	uid_t uid = getuid();
+	gid_t gid = getgid();
+	CHECK_POSIX(setresuid(uid, uid, uid));
+	CHECK_POSIX(setresgid(gid, gid, gid));
 
 	char *tmpfs_path = join_path(root, "dev/shm");
 	struct stat tmpfs_stat;
