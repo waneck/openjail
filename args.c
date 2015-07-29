@@ -2,6 +2,7 @@
 #include <getopt.h>
 #include <err.h>
 #include <errno.h>
+#include <unistd.h>
 
 static char *split_comma(char *what, char *input)
 {
@@ -36,7 +37,7 @@ static struct bind_list *bind_list_alloc(char *arg, bool extended)
 		char *rw = split_comma("--bind-from", next->dest);
 		if (NULL != rw)
 		{
-			if (strcmp(rw, "rw"))
+			if (strcmp(rw, "rw") == 0)
 				next->read_only = false;
 			else
 				errx(EXIT_FAILURE, "For '--bind-from', invalid suboption %s", rw);
@@ -135,7 +136,10 @@ _Noreturn static void usage(FILE *out)
 			" -d, --mount-dev-minimal          mount minimal /dev\n"
 			" -D, --mount-dev                  mount /dev as devtmpfs in the container\n"
 			" -T, --mount-tmpfs                mount tmpfs containers\n"
-			" -M, --tmpfs-size                 sets the maximum combined tmpfs size\n"
+			"     --fakeroot                   set current user id as root on a new user namespace\n"
+			"     --allow-net                  allow network use\n"
+			"     --chroot-rw                  allow chroot to be writable\n"
+			" -M, --tmpfs-size=SIZE            sets the maximum combined tmpfs size\n"
 			" -c, --copy=PATH                  after successful run of the program, will copy from tmpfs <PATH> to the current directory\n"
 			" -C, --copy-from=FROM,to=TO       same as --copy: optional interface for setting different paths for TO/FROM\n"
 			" -m, --rlimit-as=VALUE            sets the rlimit max virtual memory of the process\n"
@@ -164,6 +168,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->mount_dev = false;
 	out->mount_tmpfs = false;
 	out->mount_minimal_dev = false;
+	out->fakeroot = false;
+	out->allow_net = false;
+	out->chroot_rw = false;
 	out->rlimit_as = -1;
 	out->rlimit_fsize = -1;
 	out->rlimit_nofile = -1;
@@ -190,6 +197,9 @@ void parse_args(int argc, char **argv, oj_args *out)
 		{ "mount-dev",         no_argument,       0, 'D' },
 		{ "mount-tmpfs",       no_argument,       0, 'T' },
 		{ "mount-dev-minimal", no_argument,       0, 'd' },
+		{ "fakeroot",          no_argument,       0, 0x100 },
+		{ "allow-net",         no_argument,       0, 0x101 },
+		{ "chroot-rw",         no_argument,       0, 0x102 },
 		{ "tmpfs-size",        required_argument, 0, 'M' },
 		{ "copy",              required_argument, 0, 'c' },
 		{ "copy-from",         required_argument, 0, 'C' },
@@ -235,6 +245,17 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			case 'd':
 				out->mount_minimal_dev = true;
+				break;
+			case 0x100:
+				if (!geteuid())
+					errx(EXIT_FAILURE, "You cannot set --fakeroot while running as root");
+				out->fakeroot = true;
+				break;
+			case 0x101:
+				out->allow_net = true;
+				break;
+			case 0x102:
+				out->chroot_rw = true;
 				break;
 			case 'm':
 				out->rlimit_as = sizetol(optarg, "rlimit-as");

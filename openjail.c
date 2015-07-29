@@ -43,7 +43,9 @@ int main(int argc, char **argv)
 
 	char supervisor_stack[STACK_SIZE]; //reuse our own stack for the child
 
-	int flags = CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS|CLONE_NEWNET;
+	int flags = CLONE_NEWIPC|CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUTS;
+	if (!cmd_args.allow_net)
+		flags |= CLONE_NEWNET;
 	if (!cmd_args.is_root)
 		flags |= CLONE_NEWUSER;
 	pid_t pid = clone(supervisor, supervisor_stack + STACK_SIZE, flags, &cmd_args);

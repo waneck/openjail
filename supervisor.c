@@ -262,7 +262,7 @@ static double calculate_mbs(double old_mbs, struct timespec *last_time, double m
 	return old_mbs;
 }
 
-static void write_ns_map(char *map_name, unsigned int id)
+static void write_ns_map(char *map_name, unsigned int mapped_id, unsigned int id)
 {
 	char *path;
 	CHECK_POSIX(asprintf(&path, "/proc/self/%s_map", map_name));
@@ -270,7 +270,7 @@ static void write_ns_map(char *map_name, unsigned int id)
 	FILE *file = fopen(path, "w");
 	if (!file) err(EXIT_FAILURE, "failed to open ns map file: %s", path);
 
-	CHECK_POSIX(fprintf(file, "2000 %d 1\n", id));
+	CHECK_POSIX(fprintf(file, "%u %u 1\n", mapped_id, id));
 
 	fclose(file);
 	free(path);
@@ -307,8 +307,11 @@ int supervisor(void *my_args)
 		}
 		// if we unshared a new user namespace,
 		// we must define a uid/gid mapping
-		write_ns_map("uid", args->orig_uid);
-		write_ns_map("gid", args->orig_gid);
+		unsigned int mapped_id = 2000;
+		if (args->fakeroot)
+			mapped_id = 0;
+		write_ns_map("uid", mapped_id, args->orig_uid);
+		write_ns_map("gid", mapped_id, args->orig_gid);
 	}
 
 	scmp_filter_ctx ctx = seccomp_init(args->learn_name ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);

@@ -32,6 +32,9 @@ typedef struct
 	bool mount_dev;
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
+	bool fakeroot;
+	bool allow_net;
+	bool chroot_rw;
 	long tmpfs_size;
 	struct copy_list *copies;
 	struct copy_list *copies_tail;

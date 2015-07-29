@@ -126,7 +126,8 @@ int sandbox(const oj_args *args, scmp_filter_ctx ctx)
 	MOUNTX(args->root, args->root, "bind", MS_BIND|MS_REC, NULL);
 
 	// re-mount as read-only
-	MOUNTX(args->root, args->root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
+	if (!args->chroot_rw)
+		MOUNTX(args->root, args->root, "bind", MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC, NULL);
 
 	if (args->mount_proc) 
 	{
@@ -221,7 +222,7 @@ int sandbox(const oj_args *args, scmp_filter_ctx ctx)
 	CHECK_POSIX(setresuid(pw.pw_uid, pw.pw_uid, pw.pw_uid));
 	CHECK_POSIX(setresgid(pw.pw_gid, pw.pw_gid, pw.pw_gid));
 
-	char path[] = "PATH=/usr/local/bin:/usr/bin:/bin";
+	char path[] = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:";
 	char *env[] = {path, NULL, NULL, NULL, NULL};
 	if ((asprintf(env + 1, "HOME=%s", pw.pw_dir) < 0 ||
 			 asprintf(env + 2, "USER=%s", pw.pw_name) < 0 ||
