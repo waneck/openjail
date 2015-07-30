@@ -21,7 +21,7 @@
 	PTRACE_O_TRACESECCOMP | PTRACE_O_EXITKILL | PTRACE_O_TRACECLONE | \
 	PTRACE_O_TRACEEXIT | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK
 
-static void get_syscall(pid_t child, long *normalized_id, char **name)
+static long get_syscall(pid_t child)
 {
 	errno = 0;
 #ifdef __x86_64__
@@ -31,24 +31,19 @@ static void get_syscall(pid_t child, long *normalized_id, char **name)
 #endif
 	if (errno) err(EXIT_FAILURE,"get syscall");
 
+	return syscall;
+}
+
+static char *get_sycall_name(long syscall)
+{
 	char *n = seccomp_syscall_resolve_num_arch(SCMP_ARCH_NATIVE, (int)syscall);
 	if (!n) errx(EXIT_FAILURE, "seccomp_syscall_resolve_num_arch");
-	*name = n;
-
-	// get normalized id
-	*normalized_id = syscall;
+	return n;
 }
 
 static void deny_call(pid_t child)
 {
-	/* struct user_regs_struct regs; */
-	/* memset(&regs, 0, sizeof(regs)); */
-	/* CHECK_POSIX(ptrace(PTRACE_GETREGS, child, 0, &regs)); */
-#ifdef __x86_64__
-	CHECK_POSIX(ptrace(PTRACE_POKEUSER, child, sizeof(long)*ORIG_RAX, -1));
-#else
-	CHECK_POSIX(ptrace(PTRACE_POKEUSER, child, sizeof(long)*ORIG_EAX, -1));
-#endif
+	CHECK_POSIX(kill(child, SIGKILL));
 }
 
 static long get_syscall_num(char *name)
@@ -109,6 +104,13 @@ static int wait_for_seccomp_or_attach(pid_t child, int *child_count, pid_t *cur_
 			if (*cur_child == child)
 				*exit_code = WEXITSTATUS(status);
 			(*child_count)--;
+		} else if (WIFSIGNALED(status)) {
+			if (*cur_child == child)
+			{
+				fprintf(stderr, "application terminated abnormally with signal %d (%s)",
+				        WTERMSIG(status), strsignal(WTERMSIG(status)));
+			}
+			(*child_count)--;
 		} else {
 			ERRX("Unexpected status: %x", status);
 		}
@@ -168,25 +170,29 @@ int trace_process(trace_opts *opts)
 		CHECK_POSIX(ev);
 		if (!ev) break;
 
-		long syscall;
-		char *syscall_name;
-		get_syscall(cur_child, &syscall, &syscall_name);
+		long syscall = get_syscall(cur_child);
 		if (deny_report)
 		{
+			char *syscall_name = get_syscall_name(syscall);
 			fprintf(stderr, "syscall '%s' not allowed\n", syscall_name);
 			deny_call(cur_child);
+
+			free(syscall_name);
+			continue;
 		} else if (!dynarr_exists(found_syscalls, (intptr_t) syscall)) {
+			char *syscall_name = get_syscall_name(syscall);
 			dynarr_push(found_syscalls, (intptr_t) syscall);
 			if (file != NULL) 
 				fprintf(file, "%s\n", syscall_name);
 			else
 				printf("%s\n", syscall_name);
+			free(syscall_name);
 		}
-		free(syscall_name);
 
 		CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
 	}
 
+	dynarr_free(found_syscalls);
 	return exit_code;
 }
 
@@ -208,5 +214,7 @@ int child_process(int argc, char **argv)
 	CHECK(seccomp_load(ctx));
 
 	CHECK_POSIX(execvp(args[0], args));
+
+	free(args);
 	return EXIT_FAILURE;
 }
