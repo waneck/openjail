@@ -51,7 +51,7 @@ int main(int argc, char **argv)
 	pid_t pid = clone(supervisor, supervisor_stack + STACK_SIZE, flags, &cmd_args);
 	CHECK_POSIX_ARGS(pid, "clone (%d)", pid);
 
-	if (cmd_args.learn_name || cmd_args.syscall_reporting)
+	if (should_be_traced(&cmd_args))
 	{
 		trace_opts opts = { .learn = cmd_args.learn_name, .child = pid, .deny_report = cmd_args.syscall_reporting };
 		return trace_process(&opts);
@@ -72,5 +72,10 @@ int main(int argc, char **argv)
 			return 1;
 		}
 	}
+}
+
+bool should_be_traced(const oj_args *args)
+{
+	return args->learn_name || args->syscall_reporting || !args->allow_ns;
 }
 

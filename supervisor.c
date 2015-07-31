@@ -17,8 +17,6 @@
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 
-#define SYSCALL_NAME_MAX 30
-
 static void bind_list_free(struct bind_list *list) 
 {
 	while (list) 
@@ -132,16 +130,6 @@ static void copy_to_stdstream(int in_fd, int out_fd)
 	ssize_t n = read(in_fd, buffer, sizeof buffer);
 	if (check_eagain(n, "read")) return;
 	CHECK_POSIX(write(out_fd, buffer, (size_t)n));
-}
-
-static int get_syscall_nr(const char *name) 
-{
-	int result = seccomp_syscall_resolve_name(name);
-	if (result == __NR_SCMP_ERROR) 
-	{
-		errx(EXIT_FAILURE, "non-existent syscall: %s", name);
-	}
-	return result;
 }
 
 static void set_non_blocking(int fd) 
@@ -286,8 +274,8 @@ int supervisor(void *my_args)
 	// robust when the sandboxed process is not allowed to fork.
 	CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL));
 
-	// Let the main thread trace us
-	if (args->learn_name || args->syscall_reporting)
+	// Let the main process trace us
+	if (should_be_traced(args))
 	{
 		CHECK_POSIX(ptrace(PTRACE_TRACEME, 0, NULL, NULL));
 		CHECK(raise(SIGSTOP));
@@ -312,35 +300,6 @@ int supervisor(void *my_args)
 			mapped_id = 0;
 		write_ns_map("uid", mapped_id, args->orig_uid);
 		write_ns_map("gid", mapped_id, args->orig_gid);
-	}
-
-	scmp_filter_ctx ctx = seccomp_init(args->learn_name || args->syscall_reporting ? SCMP_ACT_TRACE(0) : SCMP_ACT_KILL);
-	if (!ctx) errx(EXIT_FAILURE, "seccomp_init");
-
-	if (args->syscalls_file) 
-	{
-		char name[SYSCALL_NAME_MAX];
-		FILE *file = fopen(args->syscalls_file, "r");
-		if (!file) err(EXIT_FAILURE, "failed to open syscalls file: %s", args->syscalls_file);
-		while (fgets(name, sizeof name, file)) 
-		{
-			char *pos;
-			if ((pos = strchr(name, '\n'))) *pos = '\0';
-			CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(name), 0));
-		}
-		fclose(file);
-	}
-
-	CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, __NR_execve, 0));
-
-	if (args->syscalls) 
-	{
-		for (char *s_ptr = args->syscalls, *saveptr; ; s_ptr = NULL) 
-		{
-			const char *syscall = strtok_r(s_ptr, ",", &saveptr);
-			if (!syscall) break;
-			CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, get_syscall_nr(syscall), 0));
-		}
 	}
 
 	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
@@ -422,7 +381,7 @@ int supervisor(void *my_args)
 		close(pipe_err[0]);
 		close(pipe_err[1]);
 
-		return sandbox(args, ctx);
+		return sandbox(args);
 	}
 
 	if (args->max_mbs) 
@@ -431,7 +390,6 @@ int supervisor(void *my_args)
 	}
 
 	bind_list_free(args->binds);
-	seccomp_release(ctx);
 
 	// Inform the child that the scope unit has been created.
 	CHECK_POSIX(write(pipe_in[1], &(uint8_t) { 0 }, 1));

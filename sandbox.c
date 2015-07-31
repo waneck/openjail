@@ -1,5 +1,6 @@
 #include "openjail.h"
 #include "helpers.h"
+#include "trace.h"
 
 #include <errno.h>
 #include <grp.h>
@@ -13,6 +14,44 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 
+#include <syscall.h>
+
+#define SYSCALL_NAME_MAX 30
+
+static int get_syscall_nr(const char *name) 
+{
+	int result = seccomp_syscall_resolve_name(name);
+	if (result == __NR_SCMP_ERROR) 
+	{
+		errx(EXIT_FAILURE, "non-existent syscall: %s", name);
+	}
+	return result;
+}
+
+static void allow_syscall(const oj_args *args, scmp_filter_ctx ctx, int syscall)
+{
+	if (args->hardened)
+	{
+		switch(syscall)
+		{
+			case SYS_mount:
+			case SYS_ptrace:
+			case SYS_seccomp:
+				errx(EXIT_FAILURE, "On hardened mode, neither mount, ptrace or seccomp syscalls are allowed");
+		}
+	}
+
+	unsigned int act = SCMP_ACT_ALLOW;
+	switch(syscall)
+	{
+		case SYS_clone:
+		case SYS_unshare:
+			if (!args->allow_ns)
+				act = SCMP_ACT_TRACE(SYSCALL_CLONE_ARG);
+			break;
+	}
+	CHECK(seccomp_rule_add(ctx, act, syscall, 0));
+}
 
 static void set_rlimit(int resource, long value) 
 {
@@ -104,12 +143,42 @@ static bool get_pw(const oj_args *args, struct passwd *out)
 }
 
 
-int sandbox(const oj_args *args, scmp_filter_ctx ctx)
+int sandbox(const oj_args *args)
 {
 	// Kill this process if the parent dies. This is not a replacement for killing the sandboxed
-	// processes via a control group as it is not inherited by child processes, but is more
+	// processes via a PID namespace as it is not inherited by child processes, but is more
 	// robust when the sandboxed process is not allowed to fork.
 	CHECK_POSIX(prctl(PR_SET_PDEATHSIG, SIGKILL));
+
+	scmp_filter_ctx ctx = seccomp_init(args->learn_name || args->syscall_reporting ? SCMP_ACT_TRACE(GENERIC_SYSCALL) : SCMP_ACT_KILL);
+	if (!ctx) errx(EXIT_FAILURE, "seccomp_init");
+
+	if (args->syscalls_file) 
+	{
+		char name[SYSCALL_NAME_MAX];
+		FILE *file = fopen(args->syscalls_file, "r");
+		if (!file) err(EXIT_FAILURE, "failed to open syscalls file: %s", args->syscalls_file);
+		while (fgets(name, sizeof name, file)) 
+		{
+			char *pos;
+			if ((pos = strchr(name, '\n'))) *pos = '\0';
+			allow_syscall(args, ctx, get_syscall_nr(name));
+		}
+		fclose(file);
+	}
+
+	CHECK(seccomp_rule_add(ctx, SCMP_ACT_ALLOW, __NR_execve, 0));
+
+	if (args->syscalls) 
+	{
+		for (char *s_ptr = args->syscalls, *saveptr; ; s_ptr = NULL) 
+		{
+			const char *syscall = strtok_r(s_ptr, ",", &saveptr);
+			if (!syscall) break;
+			allow_syscall(args, ctx, get_syscall_nr(syscall));
+		}
+	}
+
 
 	// Wait until the scope unit is set up before moving on. This also ensures that the parent
 	// didn't die before `prctl` was called.

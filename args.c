@@ -137,6 +137,8 @@ _Noreturn static void usage(FILE *out)
 			" -D, --mount-dev                  mount /dev as devtmpfs in the container\n"
 			" -T, --mount-tmpfs                mount tmpfs containers\n"
 			" -R, --syscall-reporting          better error reporting when a forbidden syscall was made\n"
+			" -N, --allow-ns                   allow the program to create namespaces as well\n"
+			" -H, --hardened                   make some extra sanity checks to ensure the program will run securely\n"
 			"     --fakeroot                   set current user id as root on a new user namespace\n"
 			"     --allow-net                  allow network use\n"
 			"     --chroot-rw                  allow chroot to be writable\n"
@@ -170,6 +172,8 @@ void parse_args(int argc, char **argv, oj_args *out)
 	out->mount_tmpfs = false;
 	out->mount_minimal_dev = false;
 	out->syscall_reporting = false;
+	out->hardened = false;
+	out->allow_ns = false;
 	out->fakeroot = false;
 	out->allow_net = false;
 	out->chroot_rw = false;
@@ -200,6 +204,8 @@ void parse_args(int argc, char **argv, oj_args *out)
 		{ "mount-tmpfs",       no_argument,       0, 'T' },
 		{ "mount-dev-minimal", no_argument,       0, 'd' },
 		{ "syscall-reporting", no_argument,       0, 'R' },
+		{ "allow-ns",          no_argument,       0, 'N' },
+		{ "hardened",          no_argument,       0, 'H' },
 		{ "fakeroot",          no_argument,       0, 0x100 },
 		{ "allow-net",         no_argument,       0, 0x101 },
 		{ "chroot-rw",         no_argument,       0, 0x102 },
@@ -226,7 +232,7 @@ void parse_args(int argc, char **argv, oj_args *out)
 
 	for (;;) 
 	{
-		int opt = getopt_long(argc, argv, "hvDTdpM:C:c:x:e:b:B:n:t:m:s:S:l:", opts, NULL);
+		int opt = getopt_long(argc, argv, "hvpDTdRNHM:c:C:m:x:e:b:B:n:t:s:S:l:", opts, NULL);
 		if (opt == -1)
 			break;
 
@@ -251,6 +257,12 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			case 'R':
 				out->syscall_reporting = true;
+				break;
+			case 'H':
+				out->hardened = true;
+				break;
+			case 'N':
+				out->allow_ns = true;
 				break;
 			case 0x100:
 				if (!geteuid())
@@ -327,6 +339,15 @@ void parse_args(int argc, char **argv, oj_args *out)
 				break;
 			default:
 				usage(stderr);
+		}
+	}
+
+	if (out->hardened)
+	{
+		if (out->fakeroot || out->learn_name || out->mount_dev || out->allow_net ||
+		    out->chroot_rw)
+		{
+			errx(EXIT_FAILURE, "On hardened mode, neither fakeroot, learn, mount-dev, allow-net or chroot-rw can be active");
 		}
 	}
 

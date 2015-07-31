@@ -33,6 +33,8 @@ typedef struct
 	bool mount_tmpfs;
 	bool mount_minimal_dev;
 	bool syscall_reporting;
+	bool hardened;
+	bool allow_ns;
 	bool fakeroot;
 	bool allow_net;
 	bool chroot_rw;
@@ -67,9 +69,11 @@ typedef struct
 void parse_args(int argc, char **argv, oj_args *out_struct);
 
 // implemented on sandbox.c
-int sandbox(const oj_args *args, scmp_filter_ctx ctx);
+int sandbox(const oj_args *args);
 
 // implemented on supervisor.c
 int supervisor(void *args);
+
+bool should_be_traced(const oj_args *args);
 
 #endif

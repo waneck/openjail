@@ -15,6 +15,7 @@
 #include <errno.h>
 
 #include <seccomp.h>
+#include <sched.h>
 #include <sys/reg.h>
 
 #define PTRACE_FLAGS \
@@ -34,7 +35,7 @@ static long get_syscall(pid_t child)
 	return syscall;
 }
 
-static char *get_sycall_name(long syscall)
+static char *get_syscall_name(long syscall)
 {
 	char *n = seccomp_syscall_resolve_num_arch(SCMP_ARCH_NATIVE, (int)syscall);
 	if (!n) errx(EXIT_FAILURE, "seccomp_syscall_resolve_num_arch");
@@ -170,26 +171,56 @@ int trace_process(trace_opts *opts)
 		CHECK_POSIX(ev);
 		if (!ev) break;
 
-		long syscall = get_syscall(cur_child);
-		if (deny_report)
+		long id;
+		CHECK_POSIX(ptrace(PTRACE_GETEVENTMSG, cur_child, 0, &id));
+
+		switch(id)
 		{
-			char *syscall_name = get_syscall_name(syscall);
-			fprintf(stderr, "syscall '%s' not allowed\n", syscall_name);
-			deny_call(cur_child);
+			case SYSCALL_CLONE_ARG:
+			{
+				// the clone syscall has the following layout: 
+				// long clone(unsigned long flags, void *child_stack, void *ptid, void *ctid, struct pt_regs *regs);
+				// we must intercept the first argument, and see if it's trying to create a new namespace somehow
+				// thankfully, the flags are in the same argument as the unshare call, so we can use this for both
+#ifdef __x86_64__
+				long clone_flags = ptrace(PTRACE_PEEKUSER, cur_child, sizeof(long)*RDI);
+#else
+				long clone_flags = ptrace(PTRACE_PEEKUSER, cur_child, sizeof(long)*EBX);
+#endif
 
-			free(syscall_name);
-			continue;
-		} else if (!dynarr_exists(found_syscalls, (intptr_t) syscall)) {
-			char *syscall_name = get_syscall_name(syscall);
-			dynarr_push(found_syscalls, (intptr_t) syscall);
-			if (file != NULL) 
-				fprintf(file, "%s\n", syscall_name);
-			else
-				printf("%s\n", syscall_name);
-			free(syscall_name);
+				if ((clone_flags & (CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS)) != 0)
+				{
+					fprintf(stderr, "cloning a new namespace is denied. Use `--allow-ns` to allow it\n");
+					deny_call(cur_child);
+				} else {
+					CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
+				}
+				break;
+			}
+			case GENERIC_SYSCALL:
+			{
+				long syscall = get_syscall(cur_child);
+				if (deny_report)
+				{
+					char *syscall_name = get_syscall_name(syscall);
+					fprintf(stderr, "syscall '%s' not allowed\n", syscall_name);
+					deny_call(cur_child);
+
+					free(syscall_name);
+					continue;
+				} else if (!dynarr_exists(found_syscalls, (intptr_t) syscall)) {
+					char *syscall_name = get_syscall_name(syscall);
+					dynarr_push(found_syscalls, (intptr_t) syscall);
+					if (file != NULL) 
+						fprintf(file, "%s\n", syscall_name);
+					else
+						printf("%s\n", syscall_name);
+					free(syscall_name);
+				}
+
+				CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
+			}
 		}
-
-		CHECK_POSIX(ptrace(PTRACE_CONT, cur_child, 0, 0));
 	}
 
 	dynarr_free(found_syscalls);
@@ -208,7 +239,7 @@ int child_process(int argc, char **argv)
 	CHECK(raise(SIGSTOP));
 
 	prctl (PR_SET_NO_NEW_PRIVS, 1);
-	scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_TRACE(0)); //let's trace them all
+	scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_TRACE(GENERIC_SYSCALL)); //let's trace them all
 	if (NULL == ctx) errx(EXIT_FAILURE, "Couldn't create seccomp filter");
 	seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(execve), 0);
 	CHECK(seccomp_load(ctx));
@@ -216,5 +247,6 @@ int child_process(int argc, char **argv)
 	CHECK_POSIX(execvp(args[0], args));
 
 	free(args);
+	seccomp_release(ctx);
 	return EXIT_FAILURE;
 }
